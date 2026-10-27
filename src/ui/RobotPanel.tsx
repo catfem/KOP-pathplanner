@@ -1,15 +1,13 @@
 import { useState } from 'react';
-import { FIELD_PRESETS, INCH, MOTORS, estimateFeedforward, freeSpeed } from '../model/defaults';
-import { CONTROLLERS, ENCODER_LABELS, effectiveEncoder } from '../model/hardware';
-import { setFieldImage, showToast, updateProject, useStore } from '../model/store';
+import { INCH, MOTORS, estimateFeedforward, freeSpeed } from '../model/defaults';
+import { CONTROLLERS, DRIVETRAIN_PRESETS, ENCODER_LABELS, effectiveEncoder, motorControllerIssue } from '../model/hardware';
+import { showToast, updateProject, useStore } from '../model/store';
 import type { ControllerType, EncoderType, Language, MotorType, RobotConfig } from '../model/types';
 import { Checkbox, IntListField, NumberField, Section, SelectField, TextField } from './controls';
 
 export function RobotPanel() {
   const robot = useStore((s) => s.project.robot);
-  const field = useStore((s) => s.project.field);
   const codegen = useStore((s) => s.project.codegen);
-  const hasImage = useStore((s) => s.fieldImage !== null);
   const [mass, setMass] = useState(55);
   const set = <K extends keyof RobotConfig>(k: K, v: RobotConfig[K]) =>
     updateProject((p) => {
@@ -19,18 +17,32 @@ export function RobotPanel() {
   const enc = effectiveEncoder(robot);
   const free = freeSpeed(robot);
 
-  const onImage = (file: File | undefined) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const ok = setFieldImage(String(reader.result));
-      showToast(ok ? 'Field image set.' : 'Field image set, but it is too large to remember after reload.');
-    };
-    reader.readAsDataURL(file);
+  const issue = motorControllerIssue(robot);
+  const applyPreset = (id: string) => {
+    const preset = DRIVETRAIN_PRESETS.find((p) => p.id === id);
+    if (!preset) return;
+    updateProject((p) => {
+      Object.assign(p.robot, preset.apply);
+      const est = estimateFeedforward(p.robot, mass);
+      p.robot.kV = Number(est.kV.toFixed(3));
+      p.robot.kA = Number(est.kA.toFixed(3));
+    });
+    showToast(`${preset.label}: applied, with kV/kA estimated for a ${mass} kg robot.`);
   };
 
   return (
     <div className="panel-scroll">
+      <Section title="Drivetrain preset">
+        <SelectField<string>
+          label="Quick setup"
+          value=""
+          onChange={applyPreset}
+          options={[{ value: '', label: 'Choose a KOP drivetrain…' }, ...DRIVETRAIN_PRESETS.map((p) => ({ value: p.id, label: p.label }))]}
+          hint="Sets motors, controllers, encoders and gains. Gearbox, wheels and size stay as they are."
+        />
+        {issue && <p className="warning-inline">{issue}</p>}
+      </Section>
+
       <Section title="Chassis">
         <div className="grid-2">
           <NumberField label="Length (bumpers)" unit="m" value={robot.length} min={0.3} step={0.01} onChange={(v) => set('length', v)} />
@@ -59,6 +71,7 @@ export function RobotPanel() {
           <NumberField label="Motors per side" value={robot.motorsPerSide} min={1} max={3} step={1} decimals={0} onChange={(v) => set('motorsPerSide', Math.round(v))} />
         </div>
         <p className="muted small">Theoretical free speed: {free.toFixed(2)} m/s.</p>
+        {issue && <p className="warning-inline">{issue}</p>}
       </Section>
 
       <Section title="Speed limits">
@@ -70,6 +83,21 @@ export function RobotPanel() {
           <NumberField label="Turn rate" unit="°/s" value={robot.maxTurnRate} min={10} step={10} decimals={0} onChange={(v) => set('maxTurnRate', v)} />
           <NumberField label="Turn accel" unit="°/s²" value={robot.maxTurnAccel} min={10} step={10} decimals={0} onChange={(v) => set('maxTurnAccel', v)} />
         </div>
+        <NumberField
+          label="Max speed on a BUMP"
+          unit="m/s"
+          value={robot.bumpMaxVelocity}
+          min={0.1}
+          step={0.1}
+          onChange={(v) => set('bumpMaxVelocity', v)}
+          hint="The planner slows down wherever the bumpers overlap a BUMP (2026)."
+        />
+        <Checkbox
+          label="Robot fits under the TRENCH (22.25 in)"
+          checked={robot.fitsUnderTrench}
+          onChange={(v) => set('fitsUnderTrench', v)}
+          hint="When off, paths under a TRENCH are reported as collisions."
+        />
         {robot.maxVelocity > free * 0.9 && <p className="warning-inline">Max speed is above 90% of free speed; the robot cannot keep up open loop.</p>}
       </Section>
 
@@ -106,6 +134,11 @@ export function RobotPanel() {
           onChange={(v) =>
             updateProject((p) => {
               p.robot.controller = v;
+              if (v === 'can-sparkmax-brushless') p.robot.motor = 'NEO';
+              if (v === 'can-sparkflex') p.robot.motor = 'NeoVortex';
+              if ((v.startsWith('pwm') || v.startsWith('can-talon') || v === 'can-victorspx' || v === 'can-sparkmax-brushed') && ['NEO', 'NeoVortex'].includes(p.robot.motor)) {
+                p.robot.motor = 'CIM';
+              }
               if (p.robot.encoder === 'integrated' && !CONTROLLERS[v].integratedEncoder) p.robot.encoder = 'rio';
               if (p.robot.encoder === 'rio' && p.robot.encoderCPR === 4096) p.robot.encoderCPR = 360;
             })
@@ -154,7 +187,9 @@ export function RobotPanel() {
           hint={
             enc === 'none'
               ? 'Open loop: the robot replays the planned voltages by time. Works without any sensors, but drifts.'
-              : 'Closed loop on wheel distance. Heading is held by the encoders, no gyro needed.'
+              : enc === 'integrated' && info.family === 'rev'
+                ? 'NEO / NEO Vortex built-in encoder (motor rotations, gear ratio applied). The generated code shortens its velocity filter for responsive feedback.'
+                : 'Closed loop on wheel distance. Heading is held by the encoders, no gyro needed.'
           }
         />
         {enc === 'rio' && (
@@ -188,40 +223,6 @@ export function RobotPanel() {
             </div>
           </>
         )}
-      </Section>
-
-      <Section title="Field">
-        <SelectField
-          label="Field"
-          value={field.preset}
-          onChange={(v) =>
-            updateProject((p) => {
-              const preset = FIELD_PRESETS.find((f) => f.id === v);
-              p.field.preset = v;
-              if (preset && v !== 'custom') {
-                p.field.length = preset.length;
-                p.field.width = preset.width;
-              }
-            })
-          }
-          options={FIELD_PRESETS.map((f) => ({ value: f.id, label: f.label }))}
-        />
-        <div className="grid-2">
-          <NumberField label="Length" unit="m" value={field.length} min={2} step={0.1} onChange={(v) => updateProject((p) => { p.field.length = v; p.field.preset = 'custom'; }, { coalesce: 'field:length' })} />
-          <NumberField label="Width" unit="m" value={field.width} min={2} step={0.1} onChange={(v) => updateProject((p) => { p.field.width = v; p.field.preset = 'custom'; }, { coalesce: 'field:width' })} />
-        </div>
-        <div className="button-row">
-          <label className="btn small file-btn">
-            Field image…
-            <input type="file" accept="image/*" onChange={(e) => onImage(e.target.files?.[0])} />
-          </label>
-          {hasImage && (
-            <button type="button" className="btn small" onClick={() => setFieldImage(null)}>
-              Remove image
-            </button>
-          )}
-        </div>
-        <p className="muted small">A top-down image cropped to the field edges, blue alliance wall on the left.</p>
       </Section>
 
       <Section title="Code generation">

@@ -20,8 +20,12 @@ export function Timeline({ plan }: { plan: Plan | null }) {
   const playing = useStore((s) => s.ui.playing);
   const speed = useStore((s) => s.ui.speed);
   const autoPeriod = useStore((s) => s.project.codegen.autoPeriod);
+  const field = useStore((s) => s.project.field);
   const total = plan?.totalTime ?? 0;
   const state = plan ? sampleAt(plan, time) : null;
+  const hubs = field.elementsEnabled ? field.elements.filter((e) => e.kind === 'hub') : [];
+  const hubDistance =
+    state && hubs.length ? Math.min(...hubs.map((h) => Math.hypot(h.x - state.x, h.y - state.y))) : null;
   const scaleMax = Math.max(total, 0.001);
 
   return (
@@ -62,6 +66,7 @@ export function Timeline({ plan }: { plan: Plan | null }) {
             <span>ω {((state.omega * 180) / Math.PI).toFixed(0)}°/s</span>
             <span>L {state.lVel.toFixed(2)}</span>
             <span>R {state.rVel.toFixed(2)}</span>
+            {hubDistance !== null && <span title="Robot center to the nearest HUB center">HUB {hubDistance.toFixed(2)} m</span>}
           </div>
         )}
       </div>

@@ -8,7 +8,8 @@
 // (open loop or with encoder feedback) reproduces the path without any heading
 // sensor, because heading is implied by the difference between the wheels.
 
-import type { Auto, NamedCommand, RobotConfig, Waypoint } from '../model/types';
+import { elementLabel, footprint, headingTo, overlapsElement } from '../model/field';
+import type { Auto, FieldElement, NamedCommand, RobotConfig, Waypoint } from '../model/types';
 import { type Bezier, type Vec, DEG, add, bezierPoint, clamp, dist, fromPolar, sub, wrapRad } from './geometry';
 
 export interface TrajState {
@@ -62,6 +63,8 @@ export interface TurnStep extends StepBase {
   fromHeading: number;
   toHeading: number;
   samples: TrajState[];
+  /** What the robot turns to face, e.g. "Blue HUB". */
+  target?: string;
 }
 
 export interface CommandStep extends StepBase {
@@ -105,7 +108,7 @@ export interface PlanOptions {
   sampleTime?: number;
   commands?: NamedCommand[];
   autoPeriod?: number;
-  field?: { length: number; width: number };
+  field?: { length: number; width: number; elements?: FieldElement[]; elementsEnabled?: boolean };
 }
 
 const DEFAULT_COMMAND_DURATION = 0.5;
@@ -158,7 +161,14 @@ interface PathSamples {
  * Samples the chunk of Bezier segments between waypoints[from] and
  * waypoints[to] at (nearly) uniform arc length.
  */
-export function samplePath(waypoints: Waypoint[], from: number, to: number, robot: RobotConfig, ds = 0.01): PathSamples {
+export function samplePath(
+  waypoints: Waypoint[],
+  from: number,
+  to: number,
+  robot: RobotConfig,
+  ds = 0.01,
+  bumps: FieldElement[] = [],
+): PathSamples {
   const dense: { x: number; y: number; theta: number | null; s: number; seg: number }[] = [];
   const waypointS: number[] = [0];
   let s = 0;
@@ -210,7 +220,13 @@ export function samplePath(waypoints: Waypoint[], from: number, to: number, robo
     out.y.push(a.y + (b.y - a.y) * f);
     out.theta.push(thetas[j] + (thetas[Math.min(j + 1, dense.length - 1)] - thetas[j]) * f);
     const wp = waypoints[a.seg];
-    out.segLimit.push(wp.maxVel !== null && wp.maxVel > 0 ? Math.min(wp.maxVel, robot.maxVelocity) : robot.maxVelocity);
+    let limit = wp.maxVel !== null && wp.maxVel > 0 ? Math.min(wp.maxVel, robot.maxVelocity) : robot.maxVelocity;
+    if (bumps.length) {
+      // The footprint is symmetric, so the path tangent works for reversed driving too.
+      const corners = footprint(robot.length, robot.width, out.x[k], out.y[k], out.theta[k]);
+      if (bumps.some((b) => overlapsElement(corners, b))) limit = Math.min(limit, Math.max(0.1, robot.bumpMaxVelocity));
+    }
+    out.segLimit.push(limit);
   }
   for (let k = 0; k < count; k++) {
     const k0 = Math.max(0, k - 1);
@@ -465,13 +481,15 @@ export function planAuto(auto: Auto, robot: RobotConfig, options: PlanOptions = 
     };
   }
 
+  const elements = options.field && options.field.elementsEnabled !== false ? (options.field.elements ?? []) : [];
+  const bumps = elements.filter((e) => e.kind === 'bump');
   const stops = stopIndices(waypoints);
   // Pre-compute path chunks between consecutive stops.
   const chunks = new Map<number, { to: number; path: PathSamples | null }>();
   for (let k = 0; k + 1 < stops.length; k++) {
     const a = stops[k];
     const b = stops[k + 1];
-    const path = samplePath(waypoints, a, b, robot);
+    const path = samplePath(waypoints, a, b, robot, 0.01, bumps);
     chunks.set(a, { to: b, path: path.length > MIN_CHUNK_LENGTH ? path : null });
   }
   const departureFacing = (a: number): number | null => {
@@ -480,21 +498,34 @@ export function planAuto(auto: Auto, robot: RobotConfig, options: PlanOptions = 
     return c.path.theta[0] + (waypoints[a].reversed ? Math.PI : 0);
   };
 
+  /** Heading a stop point asks for: aim at a field element, a fixed heading, or none. */
+  const facingAt = (index: number, x: number, y: number): { heading: number; target?: string } | null => {
+    const wp = waypoints[index];
+    if (wp.aimAt) {
+      const target = elements.find((e) => e.id === wp.aimAt);
+      if (target) return { heading: headingTo(target, x, y), target: elementLabel(target) };
+      warnings.push({
+        level: 'warn',
+        message: `Point ${index + 1} aims at a field element that is not on this field; its aim is ignored.`,
+        waypointIndex: index,
+      });
+    }
+    return wp.facing !== null ? { heading: wp.facing * DEG } : null;
+  };
+
   const first = waypoints[0];
   let firstDeparture: number | null = null;
   for (const a of stops) {
     firstDeparture = departureFacing(a);
     if (firstDeparture !== null) break;
   }
-  let heading = wrapRad(
-    first.facing !== null ? first.facing * DEG : (firstDeparture ?? first.angleOut * DEG),
-  );
+  let heading = wrapRad(facingAt(0, first.x, first.y)?.heading ?? firstDeparture ?? first.angleOut * DEG);
   const startPose: Pose = { x: first.x, y: first.y, heading };
   let pos = { x: first.x, y: first.y };
   let time = 0;
   let totalDistance = 0;
 
-  const pushTurn = (target: number, at: number) => {
+  const pushTurn = (target: number, at: number, label?: string) => {
     const delta = wrapRad(target - heading);
     if (Math.abs(delta) < MIN_TURN) {
       heading = nearestEquivalent(target, heading);
@@ -509,6 +540,7 @@ export function planAuto(auto: Auto, robot: RobotConfig, options: PlanOptions = 
       fromHeading: heading,
       toHeading: heading + delta,
       samples,
+      target: label,
     });
     time += duration;
     heading += delta;
@@ -517,7 +549,10 @@ export function planAuto(auto: Auto, robot: RobotConfig, options: PlanOptions = 
   for (let k = 0; k < stops.length; k++) {
     const a = stops[k];
     const wp = waypoints[a];
-    if (k > 0 && wp.facing !== null) pushTurn(wp.facing * DEG, a);
+    if (k > 0) {
+      const face = facingAt(a, pos.x, pos.y);
+      if (face) pushTurn(face.heading, a, face.target);
+    }
     for (const act of wp.actions) {
       if (act.kind === 'command') {
         const duration = commandDuration(act.name);
@@ -605,6 +640,7 @@ export function planAuto(auto: Auto, robot: RobotConfig, options: PlanOptions = 
     });
   }
   if (options.field) checkFieldBounds(steps, robot, options.field, warnings);
+  if (elements.length) checkElements(steps, robot, elements, warnings);
 
   return {
     steps,
@@ -639,16 +675,7 @@ function computePeakVoltage(steps: PlanStep[], robot: RobotConfig): number {
 
 /** Corners of the robot footprint at a pose. */
 export function robotCorners(robot: RobotConfig, x: number, y: number, heading: number): Vec[] {
-  const hl = robot.length / 2;
-  const hw = robot.width / 2;
-  const c = Math.cos(heading);
-  const s = Math.sin(heading);
-  return [
-    [hl, hw],
-    [-hl, hw],
-    [-hl, -hw],
-    [hl, -hw],
-  ].map(([px, py]) => ({ x: x + px * c - py * s, y: y + px * s + py * c }));
+  return footprint(robot.length, robot.width, x, y, heading);
 }
 
 function checkFieldBounds(
@@ -674,6 +701,52 @@ function checkFieldBounds(
         return;
       }
     }
+  }
+}
+
+/** Collisions with HUBs (and TRENCHes for tall robots), turning on BUMPs. */
+function checkElements(steps: PlanStep[], robot: RobotConfig, elements: FieldElement[], warnings: PlanWarning[]): void {
+  const reported = new Set<string>();
+  let onBump: { time: number; index: number } | null = null;
+  for (const st of steps) {
+    if (st.kind !== 'drive' && st.kind !== 'turn') continue;
+    for (let i = 0; i < st.samples.length; i += 3) {
+      const s = st.samples[i];
+      const corners = footprint(robot.length, robot.width, s.x, s.y, s.heading);
+      for (const e of elements) {
+        if (reported.has(e.id) || !overlapsElement(corners, e)) continue;
+        const at = `t = ${(st.start + s.t).toFixed(2)} s`;
+        if (e.kind === 'hub') {
+          warnings.push({ level: 'error', message: `Robot runs into the ${elementLabel(e)} at ${at}.`, waypointIndex: st.waypointIndex });
+          reported.add(e.id);
+        } else if (e.kind === 'trench' && !robot.fitsUnderTrench) {
+          warnings.push({
+            level: 'error',
+            message: `Robot drives under the ${elementLabel(e)} at ${at} but is set as too tall for its 22.25 in clearance.`,
+            waypointIndex: st.waypointIndex,
+          });
+          reported.add(e.id);
+        } else if (e.kind === 'bump') {
+          if (st.kind === 'turn') {
+            warnings.push({
+              level: 'warn',
+              message: `Robot turns in place on the ${elementLabel(e)} at ${at}; the wheels may slip and throw off the heading.`,
+              waypointIndex: st.waypointIndex,
+            });
+            reported.add(e.id);
+          } else if (!onBump) {
+            onBump = { time: st.start + s.t, index: st.waypointIndex };
+          }
+        }
+      }
+    }
+  }
+  if (onBump) {
+    warnings.push({
+      level: 'info',
+      message: `Drives over a BUMP (first at t = ${onBump.time.toFixed(2)} s): speed is limited to ${robot.bumpMaxVelocity.toFixed(1)} m/s there. Wheels can slip on the ramps, so expect a little extra drift.`,
+      waypointIndex: onBump.index,
+    });
   }
 }
 

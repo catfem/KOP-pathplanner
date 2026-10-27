@@ -155,3 +155,9 @@ export const IconCurve = () => (
     <path d="M4 18C8 4 16 20 20 6" />
   </Icon>
 );
+export const IconRuler = () => (
+  <Icon>
+    <path d="M3 17L17 3l4 4L7 21z" />
+    <path d="M7 13l2 2M10 10l2 2M13 7l2 2" />
+  </Icon>
+);

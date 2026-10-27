@@ -2,8 +2,10 @@ import { newId } from '../model/defaults';
 import { deleteWaypoint, makeStraight, setStop } from '../model/edit';
 import { setUi, updateAuto, updateProject, useStore } from '../model/store';
 import type { Action, Auto, Project } from '../model/types';
+import { KIND_LABELS, bumperAgainst, bumperDistances, bumperGap, elementLabel, formatDistance } from '../model/field';
 import { wrapDeg } from '../planner/geometry';
-import { Checkbox, IconButton, NumberField, Section, Segmented } from './controls';
+import type { Plan } from '../planner/trajectory';
+import { Checkbox, IconButton, NumberField, Section, Segmented, SelectField } from './controls';
 import { IconChevronLeft, IconChevronRight, IconDown, IconTrash, IconUp, IconX } from './icons';
 
 /** True when the robot drives backwards on the segment that ends at waypoint index. */
@@ -42,8 +44,10 @@ function CommandPicker({ onPick, placeholder }: { onPick: (name: string) => void
   );
 }
 
-export function PointPanel({ auto }: { auto: Auto }) {
+export function PointPanel({ auto, plan }: { auto: Auto; plan: Plan | null }) {
   const index = useStore((s) => s.ui.selectedIndex);
+  const robot = useStore((s) => s.project.robot);
+  const field = useStore((s) => s.project.field);
   const n = auto.waypoints.length;
   if (index === null || index >= n) {
     return (
@@ -63,6 +67,10 @@ export function PointPanel({ auto }: { auto: Auto }) {
     );
   }
   const w = auto.waypoints[index];
+  const aimTargets = field.elementsEnabled ? field.elements.filter((e) => e.kind === 'hub') : [];
+  const aimTarget = w.aimAt && field.elementsEnabled ? field.elements.find((e) => e.id === w.aimAt) : undefined;
+  const hubGap = aimTarget ? bumperGap(aimTarget, w.x, w.y, robot) : null;
+  const placement = index === 0 && plan ? bumperDistances(robot, plan.startPose, field) : null;
   const isFirst = index === 0;
   const isLast = index === n - 1;
   const stop = w.stop || isFirst || isLast;
@@ -173,6 +181,38 @@ export function PointPanel({ auto }: { auto: Auto }) {
         )}
       </Section>
 
+      {isFirst && placement && (
+        <Section title="Bumper position (robot placement)">
+          <dl className="stats">
+            <div className="wide">
+              <dt>Bumper to the {placement.wall.side === 'blue' ? 'blue' : 'red'} alliance wall</dt>
+              <dd>{formatDistance(placement.wall.distance)}</dd>
+            </div>
+            <div className="wide">
+              <dt>Bumper to the {placement.rail.side} guardrail</dt>
+              <dd>{formatDistance(placement.rail.distance)}</dd>
+            </div>
+          </dl>
+          <p className="muted small">Measured from the closest bumper corner at the starting heading. Place the robot with a tape measure using these.</p>
+          <div className="button-row">
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => edit((wp) => (wp.x += placement.wall.side === 'blue' ? -placement.wall.distance : placement.wall.distance), 'placeWall')}
+            >
+              Against the alliance wall
+            </button>
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => edit((wp) => (wp.y += placement.rail.side === 'right' ? -placement.rail.distance : placement.rail.distance), 'placeRail')}
+            >
+              Against the guardrail
+            </button>
+          </div>
+        </Section>
+      )}
+
       {stop && (
         <Section title={isFirst ? 'At the start' : isLast ? 'At the end' : 'While stopped'}>
           {!isLast && (
@@ -187,21 +227,73 @@ export function PointPanel({ auto }: { auto: Auto }) {
               hint="The robot faces the opposite way of travel (no turn needed to back up)."
             />
           )}
-          <Checkbox
-            label={isFirst ? 'Robot starts facing a set heading' : 'Turn to face a heading'}
-            checked={w.facing !== null}
+          <SelectField<string>
+            label={isFirst ? 'Starting heading' : 'Facing while stopped'}
+            value={w.aimAt ? `aim:${w.aimAt}` : w.facing !== null ? 'heading' : 'keep'}
+            options={[
+              { value: 'keep', label: isFirst ? 'Along the path' : 'No turn (keep heading)' },
+              { value: 'heading', label: 'Fixed heading' },
+              ...aimTargets.map((e) => ({ value: `aim:${e.id}`, label: `Aim at the ${elementLabel(e)}` })),
+              ...(w.aimAt && !aimTarget ? [{ value: `aim:${w.aimAt}`, label: 'Aim at (not on this field)' }] : []),
+            ]}
             onChange={(v) =>
               edit((wp, a) => {
-                // Default to the way the robot already faces here (path direction, flipped when reversing).
-                const reversed = isFirst ? wp.reversed : arrivesReversed(a, index);
-                const base = isFirst ? wp.angleOut : wp.angleIn;
-                wp.facing = v ? Math.round(wrapDeg(base + (reversed ? 180 : 0))) : null;
+                if (v === 'keep') {
+                  wp.facing = null;
+                  wp.aimAt = null;
+                } else if (v === 'heading') {
+                  wp.aimAt = null;
+                  // Default to the way the robot already faces here (path direction, flipped when reversing).
+                  const reversed = isFirst ? wp.reversed : arrivesReversed(a, index);
+                  const base = isFirst ? wp.angleOut : wp.angleIn;
+                  wp.facing = wp.facing ?? Math.round(wrapDeg(base + (reversed ? 180 : 0)));
+                } else {
+                  wp.aimAt = v.slice(4);
+                }
               }, 'facing')
             }
-            hint={isFirst ? 'Otherwise the robot starts facing along the path.' : 'Turns in place before the actions below run.'}
+            hint={
+              isFirst
+                ? 'Aiming at a HUB places the robot pointed at it (e.g. to shoot the preload).'
+                : 'Turns in place before the actions below run.'
+            }
           />
-          {w.facing !== null && (
+          {w.facing !== null && !w.aimAt && (
             <NumberField label="Facing" unit="°" value={w.facing} step={5} decimals={1} onChange={(v) => edit((wp) => (wp.facing = v), 'facingValue')} />
+          )}
+          {aimTarget && (
+            <div className="readout">
+              <dl className="stats">
+                <div>
+                  <dt>{KIND_LABELS[aimTarget.kind]} center</dt>
+                  <dd>{Math.hypot(aimTarget.x - w.x, aimTarget.y - w.y).toFixed(2)} m</dd>
+                </div>
+                <div>
+                  <dt>Aim heading</dt>
+                  <dd>{((Math.atan2(aimTarget.y - w.y, aimTarget.x - w.x) * 180) / Math.PI).toFixed(1)}°</dd>
+                </div>
+                <div className="wide">
+                  <dt>Front bumper to {KIND_LABELS[aimTarget.kind]}</dt>
+                  <dd className={hubGap !== null && hubGap < 0 ? 'bad' : undefined}>
+                    {hubGap !== null && (hubGap < 0 ? `inside by ${formatDistance(-hubGap)}` : formatDistance(hubGap))}
+                  </dd>
+                </div>
+              </dl>
+              <button
+                type="button"
+                className="btn small"
+                onClick={() =>
+                  edit((wp) => {
+                    const p = bumperAgainst(aimTarget, wp, robot, 0.02);
+                    wp.x = p.x;
+                    wp.y = p.y;
+                  }, 'bumperAgainst')
+                }
+                title="Moves this point along the aim line so the front bumper is 2 cm from the HUB"
+              >
+                Move: bumper against the {KIND_LABELS[aimTarget.kind]}
+              </button>
+            </div>
           )}
           <div className="subhead">Actions (run in order, robot stopped)</div>
           {w.actions.length === 0 && <p className="muted small">No actions.</p>}

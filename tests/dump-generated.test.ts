@@ -17,6 +17,8 @@ const VARIANTS: [ControllerType, EncoderType][] = [
   ['can-victorspx', 'rio'],
   ['can-sparkmax-brushless', 'integrated'],
   ['can-sparkmax-brushed', 'rio'],
+  ['can-sparkflex', 'integrated'],
+  ['can-sparkmax-brushless', 'none'],
   ['pwm-sparkmax', 'rio'],
   ['pwm-victorspx', 'none'],
   ['pwm-talonsrx', 'rio'],
@@ -30,6 +32,7 @@ it.runIf(!!OUT)('dumps generated code for every hardware variant', () => {
       const project = defaultProject();
       project.codegen.language = language;
       project.robot.controller = controller;
+      project.robot.motor = controller === 'can-sparkflex' ? 'NeoVortex' : controller === 'can-sparkmax-brushless' ? 'NEO' : 'CIM';
       project.robot.encoder = encoder;
       if (encoder === 'integrated') project.robot.encoderCPR = 4096;
       for (const file of generateCode(project)) {

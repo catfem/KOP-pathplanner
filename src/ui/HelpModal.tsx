@@ -30,8 +30,13 @@ export function HelpModal() {
           <h3>Quick start</h3>
           <ol>
             <li>
-              <strong>Robot tab:</strong> enter your gear ratio, wheel size, motor controllers and encoders. The defaults are a typical KOP chassis:
-              Toughbox Mini 10.71:1, 6&quot; wheels, 2 CIMs per side.
+              <strong>Robot tab:</strong> pick a drivetrain preset (CIM + Talon/Victor, <strong>NEO + SPARK MAX</strong>, NEO Vortex + SPARK
+              Flex…), then check gear ratio, wheel size, IDs and encoders. The defaults are a typical KOP chassis: Toughbox Mini 10.71:1, 6&quot;
+              wheels, 2 CIMs per side.
+            </li>
+            <li>
+              <strong>Field tab:</strong> the 2026 field shows both <strong>HUBs</strong> (positions from the official AprilTag layout), the
+              BUMPs beside them and the TRENCHes. The planner slows down on BUMPs and warns if the robot would hit a HUB.
             </li>
             <li>
               <strong>Draw the path:</strong> pick the <em>+</em> tool and click on the field. Curve mode makes smooth paths; line mode makes
@@ -39,7 +44,12 @@ export function HelpModal() {
             </li>
             <li>
               <strong>Edit:</strong> drag points and their handles, double-click the path to insert a point, select a point to make it a stop,
-              drive backwards, face a heading, or run commands (e.g. <em>Shoot</em>) and markers (e.g. <em>Intake</em> while driving).
+              drive backwards, face a heading or <strong>aim at a HUB</strong>, or run commands (e.g. <em>Shoot</em>) and markers (e.g.{' '}
+              <em>Intake</em> while driving). &quot;Bumper against the HUB&quot; moves a shooting spot so the front bumper touches the HUB.
+            </li>
+            <li>
+              <strong>Place the robot:</strong> the yellow guides show how far the starting bumpers are from the alliance wall and guardrail, and
+              how far the front bumper is from the HUB. Measure those on the real field.
             </li>
             <li>
               <strong>Preview:</strong> press play. The orange dashed robot is a physics simulation of the generated controller on an imperfect

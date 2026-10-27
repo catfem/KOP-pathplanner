@@ -7,7 +7,7 @@ import type { SimResult } from '../planner/simulate';
 import { type Plan, segmentBezier } from '../planner/trajectory';
 import { IconButton, Segmented } from './controls';
 import { type HitTarget, type View, fitView, hitTest, readPalette, renderField, speedColor, toField } from './fieldRender';
-import { IconCurve, IconFit, IconLine, IconMagnet, IconPlus, IconPointer } from './icons';
+import { IconCurve, IconFit, IconLine, IconMagnet, IconPlus, IconPointer, IconRuler } from './icons';
 
 type Drag =
   | { kind: 'point'; index: number; offset: Vec }
@@ -91,6 +91,7 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
       time: ui.time,
       palette: readPalette(canvas),
       insertPreview,
+      showGuides: ui.showGuides,
     });
   });
 
@@ -292,6 +293,13 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
         <span className="toolbar-sep" />
         <IconButton title={`Snap to ${SNAP_POS * 100} cm / ${SNAP_DEG}°`} active={ui.snap} onClick={() => setUi({ snap: !ui.snap })}>
           <IconMagnet />
+        </IconButton>
+        <IconButton
+          title="Bumper distance guides (start to walls, stops to the HUB)"
+          active={ui.showGuides}
+          onClick={() => setUi({ showGuides: !ui.showGuides })}
+        >
+          <IconRuler />
         </IconButton>
         <IconButton title="Fit field to view" onClick={fit}>
           <IconFit />

@@ -30,6 +30,11 @@ export interface Waypoint {
   reversed: boolean;
   /** Stop points: turn in place to face this field heading (deg) before running actions. */
   facing: number | null;
+  /**
+   * Stop points: id of a field element (a HUB) to aim the robot's front at while stopped.
+   * Takes precedence over `facing`.
+   */
+  aimAt: string | null;
   /** Stop points: run sequentially while the robot is stopped here. */
   actions: Action[];
   /** Commands started when the robot leaves/passes this point; interrupted at the next stop. */
@@ -44,7 +49,7 @@ export interface Auto {
   waypoints: Waypoint[];
 }
 
-export type MotorType = 'CIM' | 'MiniCIM' | 'NEO' | 'Falcon500' | 'KrakenX60';
+export type MotorType = 'CIM' | 'MiniCIM' | 'NEO' | 'NeoVortex' | 'Falcon500' | 'KrakenX60';
 
 export type ControllerType =
   | 'pwm-sparkmax'
@@ -56,13 +61,15 @@ export type ControllerType =
   | 'can-victorspx'
   | 'can-talon-victor'
   | 'can-sparkmax-brushless'
-  | 'can-sparkmax-brushed';
+  | 'can-sparkmax-brushed'
+  | 'can-sparkflex';
 
 /**
  * none       – open loop: follows the profile using only feedforward (time based).
  * rio        – quadrature encoders wired to roboRIO DIO ports.
  * integrated – sensor read through the motor controller (NEO hall sensor on
- *              SPARK MAX, or a CTRE Mag Encoder on the Talon SRX leader).
+ *              SPARK MAX, NEO Vortex encoder on SPARK Flex, or a CTRE Mag
+ *              Encoder on the Talon SRX leader).
  */
 export type EncoderType = 'none' | 'rio' | 'integrated';
 
@@ -85,6 +92,10 @@ export interface RobotConfig {
   /** Turn-in-place limits, deg/s and deg/s^2. */
   maxTurnRate: number;
   maxTurnAccel: number;
+  /** Speed limit while any part of the robot is on a BUMP, m/s. */
+  bumpMaxVelocity: number;
+  /** Robot is short enough to drive under a TRENCH (22.25 in clearance). */
+  fitsUnderTrench: boolean;
 
   /** Per-side feedforward in volts, volts per m/s, volts per m/s^2. */
   kS: number;
@@ -127,10 +138,27 @@ export interface RobotConfig {
   invertRightEncoder: boolean;
 }
 
+export type FieldElementKind = 'hub' | 'bump' | 'trench';
+
+/** An axis-aligned field element (2026: HUB, BUMP, TRENCH), positioned by its center. */
+export interface FieldElement {
+  id: string;
+  kind: FieldElementKind;
+  alliance: 'blue' | 'red';
+  x: number;
+  y: number;
+  /** Size along the field length (x) and width (y), m. */
+  sizeX: number;
+  sizeY: number;
+}
+
 export interface FieldConfig {
   preset: string;
   length: number;
   width: number;
+  elements: FieldElement[];
+  /** Draw the elements and plan around them (aiming, BUMP speed limit, collision checks). */
+  elementsEnabled: boolean;
 }
 
 export interface NamedCommand {

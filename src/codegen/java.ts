@@ -44,7 +44,7 @@ function constantsFile(pkg: string, project: Project): string {
   const unitDoc =
     enc === 'integrated'
       ? family === 'rev'
-        ? 'Wheel meters per NEO motor rotation (built-in encoder).'
+        ? 'Wheel meters per motor rotation (NEO / NEO Vortex built-in encoder).'
         : 'Wheel meters per Talon SRX sensor unit.'
       : 'Wheel meters per encoder cycle (WPILib distance per pulse).';
   return `package ${pkg};
@@ -628,49 +628,67 @@ function drivetrainFile(pkg: string, robot: RobotConfig): string {
       rightVel = 'kRightEncoderSign * rightLeader.getSelectedSensorVelocity() * 10.0 * kMetersPerEncoderUnit';
     }
   } else {
-    const brushless = robot.controller === 'can-sparkmax-brushless';
+    const flex = robot.controller === 'can-sparkflex';
+    const brushless = flex || robot.controller === 'can-sparkmax-brushless';
+    const cls = flex ? 'SparkFlex' : 'SparkMax';
+    const cfg = `${cls}Config`;
     imports.add('com.revrobotics.PersistMode');
     imports.add('com.revrobotics.ResetMode');
     imports.add('com.revrobotics.spark.SparkLowLevel.MotorType');
-    imports.add('com.revrobotics.spark.SparkMax');
+    imports.add(`com.revrobotics.spark.${cls}`);
     imports.add('com.revrobotics.spark.config.SparkBaseConfig.IdleMode');
-    imports.add('com.revrobotics.spark.config.SparkMaxConfig');
-    hardwareDoc = `REV SPARK MAX controllers (${brushless ? 'NEO brushless' : 'brushed CIM'}), REVLib 2026 configuration API.`;
+    imports.add(`com.revrobotics.spark.config.${cfg}`);
+    hardwareDoc = flex
+      ? 'REV SPARK Flex controllers with NEO Vortex motors, REVLib 2026 configuration API.'
+      : `REV SPARK MAX controllers (${brushless ? 'NEO brushless' : 'brushed CIM'}), REVLib 2026 configuration API.`;
     fields.push(
-      '  private final SparkMax[] leftMotors = new SparkMax[kLeftMotorIds.length];',
-      '  private final SparkMax[] rightMotors = new SparkMax[kRightMotorIds.length];',
+      `  private final ${cls}[] leftMotors = new ${cls}[kLeftMotorIds.length];`,
+      `  private final ${cls}[] rightMotors = new ${cls}[kRightMotorIds.length];`,
     );
     init.push(
       '    for (int i = 0; i < kLeftMotorIds.length; i++) {',
-      '      leftMotors[i] = createSpark(kLeftMotorIds[i]);',
+      '      leftMotors[i] = createMotor(kLeftMotorIds[i]);',
       '    }',
       '    for (int i = 0; i < kRightMotorIds.length; i++) {',
-      '      rightMotors[i] = createSpark(kRightMotorIds[i]);',
+      '      rightMotors[i] = createMotor(kRightMotorIds[i]);',
       '    }',
     );
+    const encoderFilter =
+      enc !== 'integrated'
+        ? []
+        : flex
+          ? [
+              '    // Faster NEO Vortex velocity readings for the trajectory follower\'s velocity feedback.',
+              '    config.encoder.quadratureMeasurementPeriod(10).quadratureAverageDepth(2);',
+            ]
+          : [
+              '    // Faster NEO velocity readings (default 32 ms window, 8 samples) for the velocity feedback.',
+              '    config.encoder.uvwMeasurementPeriod(16).uvwAverageDepth(2);',
+            ];
     helpers.push(
-      '  private static SparkMax createSpark(int canId) {',
-      `    SparkMax spark = new SparkMax(canId, MotorType.${brushless ? 'kBrushless' : 'kBrushed'});`,
-      '    SparkMaxConfig config = new SparkMaxConfig();',
+      `  private static ${cls} createMotor(int canId) {`,
+      `    ${cls} motor = new ${cls}(canId, MotorType.${brushless ? 'kBrushless' : 'kBrushed'});`,
+      `    ${cfg} config = new ${cfg}();`,
       '    config.idleMode(kBrakeMode ? IdleMode.kBrake : IdleMode.kCoast).smartCurrentLimit(kCurrentLimitAmps);',
+      ...encoderFilter,
       '    // REVLib 2026. With REVLib 2025 import SparkBase.ResetMode / SparkBase.PersistMode instead.',
-      '    spark.configure(config, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);',
-      '    return spark;',
+      '    motor.configure(config, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);',
+      '    return motor;',
       '  }',
     );
     setVolts = [
-      '    for (SparkMax motor : leftMotors) {',
+      `    for (${cls} motor : leftMotors) {`,
       '      motor.setVoltage(kLeftSign * leftVolts);',
       '    }',
-      '    for (SparkMax motor : rightMotors) {',
+      `    for (${cls} motor : rightMotors) {`,
       '      motor.setVoltage(kRightSign * rightVolts);',
       '    }',
     ];
     setPercent = [
-      '    for (SparkMax motor : leftMotors) {',
+      `    for (${cls} motor : leftMotors) {`,
       '      motor.set(kLeftSign * left);',
       '    }',
-      '    for (SparkMax motor : rightMotors) {',
+      `    for (${cls} motor : rightMotors) {`,
       '      motor.set(kRightSign * right);',
       '    }',
     ];
