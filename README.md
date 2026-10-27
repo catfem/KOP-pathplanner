@@ -12,8 +12,15 @@ controller encoders, or no sensors at all.
 - **Field editor**: draw paths with Bezier curves or "drive, stop, turn, drive" straight lines.
   Drag points and handles, double-click to insert, snap to grid, zoom and pan, undo/redo, and
   upload your own field image.
-- **Stop points**: stop anywhere to turn in place, face a heading, drive backwards, or run a
-  sequence of named commands and waits (e.g. *Shoot*, *Score*).
+- **Stop points**: stop anywhere to turn in place, face a heading, **aim at a HUB**, drive
+  backwards, or run a sequence of named commands and waits (e.g. *Shoot*, *Score*).
+- **2026 field**: both **HUBs** (centers from the official 2026 AprilTag layout), the **BUMPs** on
+  either side of them and the **TRENCHes**, all editable. The planner slows down on BUMPs, warns
+  when the bumpers would hit a HUB (or a TRENCH for tall robots), and can place a shooting spot
+  with the front bumper against the HUB.
+- **Bumper position guides**: on-field measurements from the starting bumpers to the alliance
+  wall and guardrail, and from the front bumper to the aimed HUB, so you can place the robot
+  exactly where the plan starts.
 - **Markers**: start commands while driving (e.g. *Intake*) at any point of the path.
 - **Trajectory planning** for a differential drive: time-optimal velocity profile limited by max
   speed, acceleration, centripetal acceleration, per-wheel speed and per-segment speed limits.
@@ -21,13 +28,16 @@ controller encoders, or no sensors at all.
 - **Simulation**: play the auto back with a timeline, a step bar and wheel speed / voltage
   charts. A **physics simulation of the generated controller** runs on an imperfect robot (weaker
   side, wrong kS, wheel scrub) so you can see how far the auto drifts without a gyro.
-- **Checks**: auto period overrun, bumpers leaving the field, voltage saturation, sharp corners.
+- **Checks**: auto period overrun, bumpers leaving the field or hitting a HUB, turning on a BUMP,
+  voltage saturation, sharp corners.
 - **Code generation** for **Java (WPILib command-based)** and **Python (RobotPy commands2)**:
   a drivetrain subsystem, a gyro-less trajectory follower, a named-command registry and
   one method per auto. Download everything as a `.zip`.
-- **Hardware** supported out of the box: Talon SRX / Victor SPX (CAN, Phoenix 5), SPARK MAX
-  (brushless NEO or brushed CIM, REVLib 2026), and PWM SPARK MAX / Victor SPX / Talon SRX /
-  SPARK / Victor SP. Encoders: none, roboRIO DIO quadrature, or through the motor controller.
+- **Hardware** supported out of the box: Talon SRX / Victor SPX (CAN, Phoenix 5), **SPARK MAX +
+  NEO** and **SPARK Flex + NEO Vortex** (REVLib 2026, built-in encoders with a shortened velocity
+  filter), SPARK MAX brushed (CIM), and PWM SPARK MAX / Victor SPX / Talon SRX / SPARK / Victor SP.
+  Encoders: none, roboRIO DIO quadrature, or through the motor controller. One-click drivetrain
+  presets set motors, controllers, encoders and estimated kV/kA together.
 - Projects autosave in the browser and can be saved/opened as files. PathPlanner `.path` files
   can be imported.
 
@@ -44,13 +54,16 @@ npm run dev      # http://localhost:5173
 
 ### Workflow
 
-1. **Robot tab**: gear ratio, wheel size, motors, motor controller IDs, encoders and gains.
-   The defaults are a stock KOP chassis: Toughbox Mini 10.71:1, 6" wheels, 2 CIMs per side,
-   Talon SRX + Victor SPX, E4T encoders on the roboRIO.
+1. **Robot tab**: pick a drivetrain preset (e.g. *2 NEO / side · SPARK MAX*), then check gear
+   ratio, wheel size, motor controller IDs, encoders and gains. The defaults are a stock KOP
+   chassis: Toughbox Mini 10.71:1, 6" wheels, 2 CIMs per side, Talon SRX + Victor SPX, E4T
+   encoders on the roboRIO.
+   **Field tab**: the 2026 field with its HUBs, BUMPs and TRENCHes, or your own field image.
 2. **Draw** the path with the **+** tool. Curve mode gives smooth paths; line mode gives
    "drive, stop, turn in place, drive", the most predictable option without a gyro.
 3. **Select a point** to edit it: stop or drive through, direction, handle lengths, drive
-   backwards, face a heading, actions and markers.
+   backwards, face a heading or aim at a HUB, actions and markers. The first point shows the
+   bumper distances to the alliance wall and guardrail for placing the robot.
 4. **Play** the auto and check the Auto tab for warnings. On the **Simulate** tab, add
    imperfections and watch the orange dashed robot.
 5. **Generate code**, download the zip, and copy it into your robot project. The included

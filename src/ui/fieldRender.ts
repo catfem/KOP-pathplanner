@@ -1,6 +1,7 @@
 // Canvas rendering and hit testing for the field view.
 
-import type { Auto, FieldConfig, RobotConfig } from '../model/types';
+import { KIND_LABELS, bumperDistances, bumperGap, formatDistance } from '../model/field';
+import type { Auto, FieldConfig, FieldElement, RobotConfig } from '../model/types';
 import { type Vec, add, fromPolar, sub } from '../planner/geometry';
 import type { SimResult } from '../planner/simulate';
 import { simPoseAt } from '../planner/simulate';
@@ -44,7 +45,7 @@ export function handlePos(auto: Auto, index: number, which: 'in' | 'out'): Vec {
 
 export function facingKnob(robot: RobotConfig, auto: Auto, index: number): Vec | null {
   const w = auto.waypoints[index];
-  if (w.facing === null) return null;
+  if (w.facing === null || w.aimAt) return null;
   return add(w, fromPolar(robot.length / 2 + 0.3, w.facing));
 }
 
@@ -135,6 +136,8 @@ export interface RenderInput {
   time: number;
   palette: Palette;
   insertPreview: Vec | null;
+  /** Bumper distance guides (start pose to the walls, aimed stops to the HUB). */
+  showGuides: boolean;
 }
 
 function drawRobot(
@@ -340,6 +343,26 @@ function drawHandlesAndPoints(ctx: CanvasRenderingContext2D, input: RenderInput)
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
+    // Aim line for stop points that face a field element.
+    const target = w.aimAt ? input.field.elements.find((e) => e.id === w.aimAt) : undefined;
+    if (target && input.field.elementsEnabled) {
+      const t = toScreen(v, target);
+      ctx.strokeStyle = pal.warn;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([2, 4]);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(t.x, t.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, 5, 0, Math.PI * 2);
+      ctx.moveTo(t.x - 9, t.y);
+      ctx.lineTo(t.x + 9, t.y);
+      ctx.moveTo(t.x, t.y - 9);
+      ctx.lineTo(t.x, t.y + 9);
+      ctx.stroke();
+    }
     // Facing arrow for stop points that turn to a heading.
     const knob = facingKnob(robot, auto, i);
     if (knob) {
@@ -453,14 +476,150 @@ function drawInsertPreview(ctx: CanvasRenderingContext2D, input: RenderInput): v
   ctx.stroke();
 }
 
+function elementRect(v: View, e: FieldElement): { x: number; y: number; w: number; h: number } {
+  const tl = toScreen(v, { x: e.x - e.sizeX / 2, y: e.y + e.sizeY / 2 });
+  return { x: tl.x, y: tl.y, w: e.sizeX * v.scale, h: e.sizeY * v.scale };
+}
+
+function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, rotate = false): void {
+  ctx.save();
+  ctx.translate(x, y);
+  if (rotate) ctx.rotate(-Math.PI / 2);
+  ctx.font = '700 10px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+  ctx.strokeText(text, 0, 0);
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+/** HUBs, BUMPs and TRENCHes (2026). */
+function drawElements(ctx: CanvasRenderingContext2D, input: RenderInput): void {
+  const { view: v, field, palette: pal } = input;
+  if (!field.elementsEnabled) return;
+  const order = { trench: 0, bump: 1, hub: 2 };
+  for (const e of [...field.elements].sort((a, b) => order[a.kind] - order[b.kind])) {
+    const r = elementRect(v, e);
+    const color = e.alliance === 'blue' ? pal.blue : pal.red;
+    const big = r.w > 34 && r.h > 34;
+    ctx.save();
+    if (e.kind === 'hub') {
+      ctx.fillStyle = `${color}99`;
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      // Top opening (41.7 in across).
+      ctx.beginPath();
+      ctx.arc(r.x + r.w / 2, r.y + r.h / 2, Math.min(r.w, r.h) * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fill();
+      if (big) label(ctx, KIND_LABELS.hub, r.x + r.w / 2, r.y + r.h / 2);
+    } else if (e.kind === 'bump') {
+      ctx.fillStyle = 'rgba(210,214,220,0.16)';
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      // Ramp hatching.
+      ctx.beginPath();
+      ctx.rect(r.x, r.y, r.w, r.h);
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(230,232,236,0.28)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let d = -r.h; d < r.w; d += 7) {
+        ctx.moveTo(r.x + d, r.y + r.h);
+        ctx.lineTo(r.x + d + r.h, r.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+      ctx.save();
+      ctx.strokeStyle = `${color}cc`;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      if (big) label(ctx, KIND_LABELS.bump, r.x + r.w / 2, r.y + r.h / 2, true);
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = `${color}bb`;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      if (big) label(ctx, KIND_LABELS.trench, r.x + r.w / 2, r.y + r.h / 2, true);
+    }
+    ctx.restore();
+  }
+}
+
+/** A measurement line with end ticks and a distance label. */
+function dimension(ctx: CanvasRenderingContext2D, a: Vec, b: Vec, text: string, color: string): void {
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  if (len < 4) return;
+  const nx = -(b.y - a.y) / len;
+  const ny = (b.x - a.x) / len;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  for (const p of [a, b]) {
+    ctx.moveTo(p.x + nx * 5, p.y + ny * 5);
+    ctx.lineTo(p.x - nx * 5, p.y - ny * 5);
+  }
+  ctx.stroke();
+  ctx.font = '600 11px system-ui, sans-serif';
+  const w = ctx.measureText(text).width + 10;
+  const mx = (a.x + b.x) / 2;
+  const my = (a.y + b.y) / 2;
+  ctx.fillStyle = 'rgba(11,11,11,0.82)';
+  ctx.fillRect(mx - w / 2, my - 9, w, 18);
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, mx, my);
+  ctx.restore();
+}
+
+/** Bumper placement guides: start pose to the walls, aimed stops to their target. */
+function drawGuides(ctx: CanvasRenderingContext2D, input: RenderInput): void {
+  const { view: v, plan, robot, field, auto, selected, palette: pal } = input;
+  if (!input.showGuides || !plan || !auto) return;
+  const color = '#ffd36b';
+  const start = plan.startPose;
+  const d = bumperDistances(robot, start, field);
+  const wallX = d.wall.side === 'blue' ? 0 : field.length;
+  dimension(ctx, toScreen(v, d.wall.from), toScreen(v, { x: wallX, y: d.wall.from.y }), formatDistance(d.wall.distance), color);
+  const railY = d.rail.side === 'right' ? 0 : field.width;
+  dimension(ctx, toScreen(v, d.rail.from), toScreen(v, { x: d.rail.from.x, y: railY }), formatDistance(d.rail.distance), color);
+
+  if (!field.elementsEnabled) return;
+  // Front bumper to the aimed element, for the start point and the selected stop.
+  const indices = new Set<number>([0]);
+  if (selected !== null) indices.add(selected);
+  for (const i of indices) {
+    const w = auto.waypoints[i];
+    const target = w?.aimAt ? field.elements.find((e) => e.id === w.aimAt) : undefined;
+    if (!target) continue;
+    const gap = bumperGap(target, w.x, w.y, robot);
+    const dir = Math.atan2(target.y - w.y, target.x - w.x);
+    const front = { x: w.x + Math.cos(dir) * (robot.length / 2), y: w.y + Math.sin(dir) * (robot.length / 2) };
+    const end = { x: front.x + Math.cos(dir) * Math.max(gap, 0), y: front.y + Math.sin(dir) * Math.max(gap, 0) };
+    dimension(ctx, toScreen(v, front), toScreen(v, end), `to ${KIND_LABELS[target.kind]} ${formatDistance(gap)}`, gap < 0 ? pal.red : color);
+  }
+}
+
 export function renderField(ctx: CanvasRenderingContext2D, input: RenderInput): void {
   ctx.fillStyle = input.palette.surround;
   ctx.fillRect(0, 0, input.width, input.height);
   drawField(ctx, input);
+  drawElements(ctx, input);
   drawStopGhosts(ctx, input);
   drawPath(ctx, input);
   drawSim(ctx, input);
   drawLiveRobots(ctx, input);
   drawHandlesAndPoints(ctx, input);
+  drawGuides(ctx, input);
   drawInsertPreview(ctx, input);
 }

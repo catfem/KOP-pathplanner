@@ -3,10 +3,11 @@
 import { useSyncExternalStore } from 'react';
 import { DEFAULT_SIM, type SimSettings } from '../planner/simulate';
 import { defaultProject, defaultRobot } from './defaults';
-import type { Auto, Project, Waypoint } from './types';
+import { presetElements } from './field';
+import type { Auto, FieldConfig, Project, Waypoint } from './types';
 
 export type Tool = 'select' | 'add';
-export type InspectorTab = 'point' | 'auto' | 'robot' | 'sim';
+export type InspectorTab = 'point' | 'auto' | 'robot' | 'field' | 'sim';
 export type ThemeChoice = 'system' | 'light' | 'dark';
 
 export interface UiState {
@@ -16,6 +17,8 @@ export interface UiState {
   /** Style of points added with the Add tool. */
   newPointStyle: 'smooth' | 'stop';
   snap: boolean;
+  /** Draw bumper distance guides (start pose to the walls, stops to the HUB). */
+  showGuides: boolean;
   tab: InspectorTab;
   showSim: boolean;
   sim: SimSettings;
@@ -74,11 +77,20 @@ export function normalizeProject(raw: unknown): Project {
   return {
     version: 1,
     robot: { ...defaultRobot(), ...(p.robot ?? {}) },
-    field: { ...base.field, ...(p.field ?? {}) },
+    field: normalizeField(p.field, base.field),
     autos: autos.length ? autos : base.autos,
     commands: Array.isArray(p.commands) ? p.commands.filter((c) => c && typeof c.name === 'string') : base.commands,
     codegen: { ...base.codegen, ...(p.codegen ?? {}) },
   };
+}
+
+function normalizeField(raw: Partial<FieldConfig> | undefined, base: FieldConfig): FieldConfig {
+  const field = { ...base, ...(raw ?? {}) };
+  // Older projects have no elements: give the 2026 field its HUBs, BUMPs and TRENCHes.
+  if (!Array.isArray(raw?.elements)) field.elements = presetElements(field.preset);
+  field.elements = field.elements.filter((e) => e && typeof e.id === 'string' && Number.isFinite(e.x) && Number.isFinite(e.y));
+  field.elementsEnabled = raw?.elementsEnabled ?? true;
+  return field;
 }
 
 function normalizeWaypoint(w: Partial<Waypoint>, i: number): Waypoint {
@@ -94,6 +106,7 @@ function normalizeWaypoint(w: Partial<Waypoint>, i: number): Waypoint {
     stop: !!w.stop,
     reversed: !!w.reversed,
     facing: typeof w.facing === 'number' ? w.facing : null,
+    aimAt: typeof w.aimAt === 'string' ? w.aimAt : null,
     actions: Array.isArray(w.actions) ? w.actions : [],
     markers: Array.isArray(w.markers) ? w.markers.filter((m) => typeof m === 'string') : [],
     maxVel: typeof w.maxVel === 'number' ? w.maxVel : null,
@@ -126,6 +139,7 @@ function loadInitial(): State {
       tool: 'select',
       newPointStyle: savedUi.newPointStyle === 'stop' ? 'stop' : 'smooth',
       snap: savedUi.snap ?? false,
+      showGuides: savedUi.showGuides ?? true,
       tab: savedUi.tab ?? 'point',
       showSim: savedUi.showSim ?? true,
       sim: { ...DEFAULT_SIM, ...(savedUi.sim ?? {}) },
@@ -156,8 +170,8 @@ function scheduleSave(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     safeSet(PROJECT_KEY, JSON.stringify(state.project));
-    const { selectedAutoId, newPointStyle, snap, tab, showSim, sim, theme } = state.ui;
-    safeSet(UI_KEY, JSON.stringify({ selectedAutoId, newPointStyle, snap, tab, showSim, sim, theme }));
+    const { selectedAutoId, newPointStyle, snap, showGuides, tab, showSim, sim, theme } = state.ui;
+    safeSet(UI_KEY, JSON.stringify({ selectedAutoId, newPointStyle, snap, showGuides, tab, showSim, sim, theme }));
   }, 300);
 }
 
@@ -240,6 +254,7 @@ export function setUi(patch: Partial<UiState>): void {
     'selectedAutoId' in patch ||
     'newPointStyle' in patch ||
     'snap' in patch ||
+    'showGuides' in patch ||
     'tab' in patch ||
     'showSim' in patch ||
     'sim' in patch ||

@@ -5,6 +5,7 @@ import { simulatePlan } from './planner/simulate';
 import { planAuto } from './planner/trajectory';
 import { AutoPanel } from './ui/AutoPanel';
 import { CodeModal } from './ui/CodeModal';
+import { FieldPanel } from './ui/FieldPanel';
 import { FieldView } from './ui/FieldView';
 import { Header } from './ui/Header';
 import { HelpModal } from './ui/HelpModal';
@@ -19,6 +20,7 @@ const TABS: { id: InspectorTab; label: string }[] = [
   { id: 'point', label: 'Point' },
   { id: 'auto', label: 'Auto' },
   { id: 'robot', label: 'Robot' },
+  { id: 'field', label: 'Field' },
   { id: 'sim', label: 'Simulate' },
 ];
 
@@ -188,9 +190,10 @@ export function App() {
             ))}
           </div>
           <div className="tab-panel" role="tabpanel" id="inspector-panel" aria-labelledby={`tab-${tab}`}>
-            {tab === 'point' && auto && <PointPanel auto={auto} />}
+            {tab === 'point' && auto && <PointPanel auto={auto} plan={plan} />}
             {tab === 'auto' && auto && <AutoPanel auto={auto} plan={plan} />}
             {tab === 'robot' && <RobotPanel />}
+            {tab === 'field' && <FieldPanel />}
             {tab === 'sim' && <SimPanel sim={sim} />}
           </div>
         </aside>

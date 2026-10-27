@@ -14,7 +14,7 @@ export type IRStep =
   | { kind: 'start'; x: number; y: number; heading: number }
   | { kind: 'command'; name: string }
   | { kind: 'wait'; seconds: number }
-  | { kind: 'turn'; data: string; degrees: number; duration: number }
+  | { kind: 'turn'; data: string; degrees: number; duration: number; target?: string }
   | {
       kind: 'drive';
       data: string;
@@ -130,6 +130,7 @@ export function buildIR(auto: Auto, project: Project, plan?: Plan): IRAuto {
       sampleTime: project.codegen.sampleTime,
       commands: project.commands,
       autoPeriod: project.codegen.autoPeriod,
+      field: project.field,
     });
   const steps: IRStep[] = [{ kind: 'start', x: p.startPose.x, y: p.startPose.y, heading: p.startPose.heading }];
   const trajectories: IRTrajectory[] = [];
@@ -154,6 +155,7 @@ export function buildIR(auto: Auto, project: Project, plan?: Plan): IRAuto {
           data: name,
           degrees: ((st.toHeading - st.fromHeading) * 180) / Math.PI,
           duration: st.duration,
+          target: st.target,
         });
         break;
       }
@@ -207,7 +209,9 @@ export function describeStep(step: IRStep): string {
     case 'wait':
       return `Wait ${num(step.seconds, 2)} s`;
     case 'turn':
-      return `Turn ${step.degrees > 0 ? 'left' : 'right'} ${num(Math.abs(step.degrees), 1)} deg in place (${num(step.duration, 2)} s)`;
+      return `Turn ${step.degrees > 0 ? 'left' : 'right'} ${num(Math.abs(step.degrees), 1)} deg in place${
+        step.target ? ` to face the ${step.target}` : ''
+      } (${num(step.duration, 2)} s)`;
     case 'drive':
       return `Drive${step.reversed ? ' backwards' : ''} from point ${step.from + 1} to ${step.to + 1}: ${num(step.distance, 2)} m in ${num(step.duration, 2)} s`;
   }

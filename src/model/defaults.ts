@@ -1,3 +1,4 @@
+import { presetElements } from './field';
 import type { Auto, MotorType, Project, RobotConfig, Waypoint } from './types';
 
 let idCounter = 0;
@@ -16,6 +17,7 @@ export const MOTORS: Record<MotorType, MotorSpec> = {
   CIM: { label: 'CIM', freeSpeedRpm: 5310, stallTorque: 2.41 },
   MiniCIM: { label: 'Mini CIM', freeSpeedRpm: 5840, stallTorque: 1.41 },
   NEO: { label: 'NEO', freeSpeedRpm: 5676, stallTorque: 2.6 },
+  NeoVortex: { label: 'NEO Vortex', freeSpeedRpm: 6784, stallTorque: 3.6 },
   Falcon500: { label: 'Falcon 500', freeSpeedRpm: 6380, stallTorque: 4.69 },
   KrakenX60: { label: 'Kraken X60', freeSpeedRpm: 6000, stallTorque: 7.09 },
 };
@@ -45,6 +47,8 @@ export function defaultRobot(): RobotConfig {
     maxCentripetal: 2.0,
     maxTurnRate: 180,
     maxTurnAccel: 360,
+    bumpMaxVelocity: 1.0,
+    fitsUnderTrench: true,
 
     kS: 0.9,
     kV: 3.0,
@@ -103,6 +107,7 @@ export function makeWaypoint(x: number, y: number, angle: number, partial: Parti
     stop: false,
     reversed: false,
     facing: null,
+    aimAt: null,
     actions: [],
     markers: [],
     maxVel: null,
@@ -110,31 +115,34 @@ export function makeWaypoint(x: number, y: number, angle: number, partial: Parti
   };
 }
 
+/** Example autos laid out on the 2026 field (blue alliance). */
 export function exampleAutos(): Auto[] {
-  const curve: Auto = {
+  const twoPiece: Auto = {
     id: newId('auto'),
     name: 'Two Piece',
     waypoints: [
-      makeWaypoint(1.5, 4.2, -30, {
+      // Start facing the HUB, shoot the preload, then drive over the BUMP to the neutral zone.
+      makeWaypoint(2.6, 2.2, 0, {
         stop: true,
-        lenOut: 1.4,
+        lenOut: 1.2,
+        aimAt: 'blue-hub',
         actions: [{ id: newId('act'), kind: 'command', name: 'Shoot' }],
-        markers: ['Intake'],
       }),
-      makeWaypoint(4.3, 2.4, 0, { lenIn: 1.2, lenOut: 1.0 }),
-      makeWaypoint(6.6, 2.4, 0, {
+      makeWaypoint(5.9, 2.5, 0, { lenIn: 1.0, lenOut: 0.8, markers: ['Intake'] }),
+      makeWaypoint(7.6, 1.6, -20, {
         stop: true,
         reversed: true,
-        angleOut: 165,
+        angleOut: 160,
         lenIn: 0.8,
-        lenOut: 1.8,
+        lenOut: 1.2,
         actions: [{ id: newId('act'), kind: 'wait', seconds: 0.3 }],
       }),
-      makeWaypoint(2.3, 4.9, 180, {
+      // Back over the BUMP, aim at the HUB and shoot.
+      makeWaypoint(3.1, 2.7, 180, {
         stop: true,
-        lenIn: 1.2,
+        lenIn: 1.5,
         lenOut: 0.5,
-        facing: -15,
+        aimAt: 'blue-hub',
         actions: [{ id: newId('act'), kind: 'command', name: 'Shoot' }],
       }),
     ],
@@ -143,19 +151,20 @@ export function exampleAutos(): Auto[] {
     id: newId('auto'),
     name: 'Drive And Turn',
     waypoints: [
-      makeWaypoint(1.5, 1.4, 0, { stop: true, lenIn: 0, lenOut: 0 }),
-      makeWaypoint(5.0, 1.4, 0, { stop: true, angleOut: 90, lenIn: 0, lenOut: 0 }),
-      makeWaypoint(5.0, 3.6, 90, {
+      makeWaypoint(1.3, 1.6, 0, { stop: true, lenIn: 0, lenOut: 0 }),
+      makeWaypoint(3.2, 1.6, 0, { stop: true, angleOut: 90, lenIn: 0, lenOut: 0 }),
+      makeWaypoint(3.2, 3.4, 90, {
         stop: true,
         angleOut: 180,
         lenIn: 0,
         lenOut: 0,
+        aimAt: 'blue-hub',
         actions: [{ id: newId('act'), kind: 'command', name: 'Score' }],
       }),
-      makeWaypoint(2.8, 3.6, 180, { stop: true, lenIn: 0, lenOut: 0 }),
+      makeWaypoint(1.6, 3.4, 180, { stop: true, lenIn: 0, lenOut: 0 }),
     ],
   };
-  return [curve, square];
+  return [twoPiece, square];
 }
 
 export function defaultProject(): Project {
@@ -163,7 +172,13 @@ export function defaultProject(): Project {
   return {
     version: 1,
     robot: defaultRobot(),
-    field: { preset: preset.id, length: preset.length, width: preset.width },
+    field: {
+      preset: preset.id,
+      length: preset.length,
+      width: preset.width,
+      elements: presetElements(preset.id),
+      elementsEnabled: true,
+    },
     autos: exampleAutos(),
     commands: [
       { name: 'Shoot', duration: 1.0 },

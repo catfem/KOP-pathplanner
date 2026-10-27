@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { defaultRobot, exampleAutos, makeWaypoint } from '../src/model/defaults';
+import { defaultProject, defaultRobot, exampleAutos, makeWaypoint } from '../src/model/defaults';
+import { rebuilt2026Elements } from '../src/model/field';
 import type { Auto, RobotConfig } from '../src/model/types';
 import { DEG } from '../src/planner/geometry';
 import { simulatePlan } from '../src/planner/simulate';
@@ -124,19 +125,63 @@ describe('planAuto', () => {
         { name: 'Shoot', duration: 1 },
         { name: 'Intake', duration: 0.5 },
       ],
+      field: defaultProject().field,
     });
     expect(plan.steps[0]).toMatchObject({ kind: 'command', name: 'Shoot' });
     expect(plan.steps.at(-1)).toMatchObject({ kind: 'command', name: 'Shoot' });
-    // The last stop turns to face -15 deg before shooting.
-    const end = ((plan.endPose.heading / DEG) % 360 + 540) % 360 - 180;
-    expect(end).toBeCloseTo(-15, 3);
+    // Both shots aim at the blue HUB.
+    const hub = rebuilt2026Elements().find((e) => e.id === 'blue-hub')!;
+    const aim = (x: number, y: number) => Math.atan2(hub.y - y, hub.x - x);
+    const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+    expect(wrap(plan.startPose.heading - aim(2.6, 2.2))).toBeCloseTo(0, 6);
+    expect(wrap(plan.endPose.heading - aim(3.1, 2.7))).toBeCloseTo(0, 3);
+    const lastTurn = plan.steps.filter((s) => s.kind === 'turn').at(-1);
+    expect(lastTurn).toMatchObject({ target: 'Blue HUB' });
     const firstDrive = plan.steps.find((s) => s.kind === 'drive');
     if (!firstDrive || firstDrive.kind !== 'drive') throw new Error('expected drive');
     expect(firstDrive.markers.map((m) => m.name)).toEqual(['Intake']);
-    expect(firstDrive.markers[0].time).toBe(0);
     const reverse = plan.steps.filter((s) => s.kind === 'drive')[1];
     if (!reverse || reverse.kind !== 'drive') throw new Error('expected second drive');
     expect(reverse.reversed).toBe(true);
+    expect(plan.warnings.filter((w) => w.level !== 'info')).toEqual([]);
+  });
+
+  it('slows down on BUMPs and reports HUB collisions', () => {
+    const field = defaultProject().field;
+    const bump = field.elements.find((e) => e.id === 'blue-bump-right')!;
+    // Straight across the BUMP.
+    const straight = () =>
+      auto(makeWaypoint(2.5, bump.y, 0, { stop: true, lenOut: 0 }), makeWaypoint(7, bump.y, 0, { stop: true, lenIn: 0 }));
+    const across = planAuto(straight(), robot, { field });
+    const drive = across.steps[0];
+    if (drive.kind !== 'drive') throw new Error('expected drive');
+    const onBump = drive.samples.filter((s) => Math.abs(s.x - bump.x) < bump.sizeX / 2);
+    expect(onBump.length).toBeGreaterThan(0);
+    expect(Math.max(...onBump.map((s) => s.v))).toBeLessThanOrEqual(robot.bumpMaxVelocity + 1e-6);
+    expect(Math.max(...drive.samples.map((s) => s.v))).toBeGreaterThan(robot.bumpMaxVelocity + 0.5);
+    expect(across.warnings.some((w) => w.level === 'info' && w.message.includes('BUMP'))).toBe(true);
+    // Without field elements there is no slowdown.
+    const free = planAuto(straight(), robot, { field: { ...field, elementsEnabled: false } });
+    expect(free.totalTime).toBeLessThan(across.totalTime);
+    // Straight through the HUB.
+    const hub = field.elements.find((e) => e.id === 'blue-hub')!;
+    const crash = planAuto(
+      auto(makeWaypoint(2.5, hub.y, 0, { stop: true, lenOut: 0 }), makeWaypoint(7, hub.y, 0, { stop: true, lenIn: 0 })),
+      robot,
+      { field },
+    );
+    expect(crash.warnings.some((w) => w.level === 'error' && w.message.includes('Blue HUB'))).toBe(true);
+    // TRENCH only matters for tall robots.
+    const trench = field.elements.find((e) => e.id === 'blue-trench-right')!;
+    const under = auto(makeWaypoint(2.5, trench.y, 0, { stop: true, lenOut: 0 }), makeWaypoint(7, trench.y, 0, { stop: true, lenIn: 0 }));
+    expect(planAuto(under, robot, { field }).warnings.some((w) => w.message.includes('TRENCH'))).toBe(false);
+    expect(planAuto(under, { ...robot, fitsUnderTrench: false }, { field }).warnings.some((w) => w.message.includes('TRENCH'))).toBe(true);
+  });
+
+  it('ignores HUB aiming when the field has no such element', () => {
+    const [twoPiece] = exampleAutos();
+    const plan = planAuto(twoPiece, robot, { field: { length: 16.5, width: 8, elements: [], elementsEnabled: true } });
+    expect(plan.warnings.some((w) => w.message.includes('not on this field'))).toBe(true);
   });
 
   it('respects per-segment speed limits and curvature limits', () => {

@@ -1701,3 +1701,79 @@ kbd {
     max-height: calc(100vh - 16px);
   }
 }
+
+/* ---------- Field elements & readouts ---------- */
+.element-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  border-top: 1px dashed var(--border);
+}
+
+.element-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.swatch.blue {
+  background: var(--alliance-blue);
+}
+
+.swatch.red {
+  background: var(--alliance-red);
+}
+
+.swatch.bump {
+  opacity: 0.55;
+  background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.55) 0 2px, transparent 2px 5px);
+}
+
+.swatch.trench {
+  background: transparent;
+  border: 2px dashed currentColor;
+}
+
+.swatch.trench.blue {
+  color: var(--alliance-blue);
+}
+
+.swatch.trench.red {
+  color: var(--alliance-red);
+}
+
+.empty-elements {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.readout {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.readout .stats {
+  width: 100%;
+}
+
+.stats .wide {
+  grid-column: 1 / -1;
+}
+
+.tabs button {
+  padding: 0 2px;
+}

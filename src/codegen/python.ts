@@ -414,18 +414,37 @@ function drivetrainFile(robot: RobotConfig): string {
       rightVel = 'self.right_encoder_sign * self.right_leader.getSelectedSensorVelocity() * 10.0 * c.METERS_PER_ENCODER_UNIT';
     }
   } else {
-    const brushless = robot.controller === 'can-sparkmax-brushless';
+    const flex = robot.controller === 'can-sparkflex';
+    const brushless = flex || robot.controller === 'can-sparkmax-brushless';
+    const cls = flex ? 'SparkFlex' : 'SparkMax';
     vendorImports.push('import rev');
-    hardwareDoc = `REV SPARK MAX controllers (${brushless ? 'NEO brushless' : 'brushed CIM'}), robotpy-rev 2026 configuration API.`;
+    hardwareDoc = flex
+      ? 'REV SPARK Flex controllers with NEO Vortex motors, robotpy-rev 2026 configuration API.'
+      : `REV SPARK MAX controllers (${brushless ? 'NEO brushless' : 'brushed CIM'}), robotpy-rev 2026 configuration API.`;
     init.push(
-      '        config = rev.SparkMaxConfig()',
+      `        config = rev.${cls}Config()`,
       '        config.setIdleMode(',
       '            rev.SparkBaseConfig.IdleMode.kBrake if c.BRAKE_MODE else rev.SparkBaseConfig.IdleMode.kCoast',
       '        )',
       '        config.smartCurrentLimit(c.CURRENT_LIMIT_AMPS)',
+    );
+    if (enc === 'integrated') {
+      init.push(
+        ...(flex
+          ? [
+              "        # Faster NEO Vortex velocity readings for the trajectory follower's velocity feedback.",
+              '        config.encoder.quadratureMeasurementPeriod(10).quadratureAverageDepth(2)',
+            ]
+          : [
+              '        # Faster NEO velocity readings (default 32 ms window, 8 samples) for the velocity feedback.',
+              '        config.encoder.uvwMeasurementPeriod(16).uvwAverageDepth(2)',
+            ]),
+      );
+    }
+    init.push(
       `        motor_type = rev.SparkLowLevel.MotorType.${brushless ? 'kBrushless' : 'kBrushed'}`,
-      '        self.left_motors = [rev.SparkMax(i, motor_type) for i in c.LEFT_MOTOR_IDS]',
-      '        self.right_motors = [rev.SparkMax(i, motor_type) for i in c.RIGHT_MOTOR_IDS]',
+      `        self.left_motors = [rev.${cls}(i, motor_type) for i in c.LEFT_MOTOR_IDS]`,
+      `        self.right_motors = [rev.${cls}(i, motor_type) for i in c.RIGHT_MOTOR_IDS]`,
       '        for motor in [*self.left_motors, *self.right_motors]:',
       '            motor.configure(config, rev.ResetMode.kResetSafeParameters, rev.PersistMode.kPersistParameters)',
     );
