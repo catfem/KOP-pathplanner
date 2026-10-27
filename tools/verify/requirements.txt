@@ -1,0 +1,4 @@
+robotpy==2026.2.2
+robotpy-commands-v2==2026.2.2
+robotpy-rev==2026.0.4
+robotpy-ctre==2026.1.0.1
