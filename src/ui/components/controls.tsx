@@ -27,6 +27,15 @@ export function NumberField({ label, value, onChange, unit, step = 0.1, min, max
   useEffect(() => {
     if (!focused.current) setText(fmt(value, decimals));
   }, [value, decimals]);
+  const parsed = Number(text);
+  const problem =
+    text.trim() === '' || !Number.isFinite(parsed)
+      ? 'Enter a number'
+      : min !== undefined && parsed < min
+        ? `Minimum is ${min}`
+        : max !== undefined && parsed > max
+          ? `Maximum is ${max}`
+          : null;
   const commit = (raw: string) => {
     const v = Number(raw);
     if (raw.trim() === '' || !Number.isFinite(v)) return;
@@ -35,12 +44,15 @@ export function NumberField({ label, value, onChange, unit, step = 0.1, min, max
     if (max !== undefined) c = Math.min(max, c);
     onChange(c);
   };
+  const errorId = `${id}-error`;
   return (
     <div className="field">
       <label htmlFor={id}>{label}</label>
-      <div className="field-input">
+      <div className={`field-input${problem ? ' invalid' : ''}`}>
         <input
           id={id}
+          aria-invalid={problem ? true : undefined}
+          aria-describedby={problem ? errorId : undefined}
           type="number"
           inputMode="decimal"
           step={step}
@@ -63,6 +75,12 @@ export function NumberField({ label, value, onChange, unit, step = 0.1, min, max
         />
         {unit && <span className="unit">{unit}</span>}
       </div>
+      {problem && (
+        <div className="field-error" id={errorId}>
+          {problem}
+          {text.trim() !== '' && Number.isFinite(parsed) ? '; using the closest allowed value.' : '; the last valid value is kept.'}
+        </div>
+      )}
       {hint && <div className="hint">{hint}</div>}
     </div>
   );

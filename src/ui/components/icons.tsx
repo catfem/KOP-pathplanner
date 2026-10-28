@@ -161,3 +161,20 @@ export const IconRuler = () => (
     <path d="M7 13l2 2M10 10l2 2M13 7l2 2" />
   </Icon>
 );
+export const IconPanelLeft = () => (
+  <Icon>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M9 4v16" />
+  </Icon>
+);
+export const IconPanelRight = () => (
+  <Icon>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M15 4v16" />
+  </Icon>
+);
+export const IconChart = () => (
+  <Icon>
+    <path d="M4 19h16M5 15l4-5 4 3 6-7" />
+  </Icon>
+);

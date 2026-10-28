@@ -1,0 +1,193 @@
+/*
+ * Design tokens. Low-glare by design: flat surfaces, hairline borders, one
+ * muted accent, no glows, gradients or drop shadows. Dark mode avoids pure
+ * white text and saturated fills so the screen stays calm in a dim pit.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Chrome */
+  --bg: #eceef1;
+  --surface: #fafbfc;
+  --surface-2: #f3f4f6;
+  --surface-3: #e7e9ed;
+  --border: #dcdfe4;
+  --border-strong: #c6cad1;
+  --text: #22262c;
+  --text-2: #4c525b;
+  --text-3: #6e7580;
+  --accent: #355f93;
+  --accent-bg: #3a659b;
+  --accent-bg-hover: #33598a;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(53, 95, 147, 0.1);
+  --focus: #355f93;
+  --danger: #a94442;
+  --danger-soft: rgba(169, 68, 66, 0.1);
+  --warn: #8a6212;
+  --warn-soft: rgba(176, 128, 24, 0.12);
+  --good: #3d7a4b;
+  --scrim: rgba(18, 20, 24, 0.42);
+
+  /* Chart series (validated categorical palette, light surface). */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #199e70;
+  --series-wait: #8a8f97;
+  --chart-grid: #e5e7eb;
+  --chart-axis: #c2c7ce;
+  --sim-color: #b8784a;
+
+  /* Field canvas */
+  --canvas-surround: #d9dce1;
+  --canvas-carpet: #3a423f;
+  --canvas-line: rgba(232, 235, 239, 0.55);
+  --canvas-grid: rgba(232, 235, 239, 0.06);
+  --canvas-blue: #5b84b8;
+  --canvas-red: #b86a6a;
+  --canvas-accent: #8fb2de;
+  --canvas-point: #e3e6ea;
+  --canvas-point-stroke: #14171a;
+  --canvas-start: #82b08d;
+  --canvas-end: #c98080;
+  --canvas-handle: rgba(227, 230, 234, 0.55);
+  --canvas-handle-in: #969ca5;
+  --canvas-ghost: rgba(227, 230, 234, 0.26);
+  --canvas-robot: #8fb2de;
+  --canvas-sim: #d09a6e;
+  --canvas-guide: #d2b26a;
+  --canvas-aim: #d2b26a;
+  --canvas-label-bg: rgba(20, 23, 26, 0.78);
+  --canvas-label-text: #e3e6ea;
+  --canvas-bump-hatch: rgba(227, 230, 234, 0.16);
+  --canvas-path-hue: 172;
+  --canvas-path-sat: 26;
+  --canvas-path-light-slow: 42;
+  --canvas-path-light-fast: 70;
+
+  /* Type and shape */
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+  --control-h: 30px;
+  --control-h-sm: 26px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #111316;
+    --surface: #16191c;
+    --surface-2: #1b1e22;
+    --surface-3: #22262b;
+    --border: #262a30;
+    --border-strong: #333840;
+    --text: #d3d6db;
+    --text-2: #a2a8b1;
+    --text-3: #7a818b;
+    --accent: #7ea3d2;
+    --accent-bg: #2d4b70;
+    --accent-bg-hover: #33557e;
+    --accent-fg: #e4e9f0;
+    --accent-soft: rgba(126, 163, 210, 0.12);
+    --focus: #7ea3d2;
+    --danger: #d08a87;
+    --danger-soft: rgba(208, 138, 135, 0.12);
+    --warn: #c9a45c;
+    --warn-soft: rgba(201, 164, 92, 0.12);
+    --good: #7fae8a;
+    --scrim: rgba(5, 6, 8, 0.6);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-wait: #6c7179;
+    --chart-grid: #22262b;
+    --chart-axis: #353a42;
+    --sim-color: #c98f63;
+    --canvas-surround: #0e1012;
+    --canvas-carpet: #252b29;
+    --canvas-line: rgba(213, 216, 221, 0.4);
+    --canvas-grid: rgba(213, 216, 221, 0.045);
+    --canvas-blue: #557aa8;
+    --canvas-red: #a96464;
+    --canvas-accent: #7ea3d2;
+    --canvas-point: #cfd3d8;
+    --canvas-point-stroke: #0e1012;
+    --canvas-start: #74a07f;
+    --canvas-end: #b97474;
+    --canvas-handle: rgba(207, 211, 216, 0.45);
+    --canvas-handle-in: #80878f;
+    --canvas-ghost: rgba(207, 211, 216, 0.2);
+    --canvas-robot: #7ea3d2;
+    --canvas-sim: #c08a60;
+    --canvas-guide: #bf9d58;
+    --canvas-aim: #bf9d58;
+    --canvas-label-bg: rgba(14, 16, 18, 0.82);
+    --canvas-label-text: #cfd3d8;
+    --canvas-bump-hatch: rgba(207, 211, 216, 0.12);
+    --canvas-path-light-slow: 38;
+    --canvas-path-light-fast: 62;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #111316;
+  --surface: #16191c;
+  --surface-2: #1b1e22;
+  --surface-3: #22262b;
+  --border: #262a30;
+  --border-strong: #333840;
+  --text: #d3d6db;
+  --text-2: #a2a8b1;
+  --text-3: #7a818b;
+  --accent: #7ea3d2;
+  --accent-bg: #2d4b70;
+  --accent-bg-hover: #33557e;
+  --accent-fg: #e4e9f0;
+  --accent-soft: rgba(126, 163, 210, 0.12);
+  --focus: #7ea3d2;
+  --danger: #d08a87;
+  --danger-soft: rgba(208, 138, 135, 0.12);
+  --warn: #c9a45c;
+  --warn-soft: rgba(201, 164, 92, 0.12);
+  --good: #7fae8a;
+  --scrim: rgba(5, 6, 8, 0.6);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-wait: #6c7179;
+  --chart-grid: #22262b;
+  --chart-axis: #353a42;
+  --sim-color: #c98f63;
+  --canvas-surround: #0e1012;
+  --canvas-carpet: #252b29;
+  --canvas-line: rgba(213, 216, 221, 0.4);
+  --canvas-grid: rgba(213, 216, 221, 0.045);
+  --canvas-blue: #557aa8;
+  --canvas-red: #a96464;
+  --canvas-accent: #7ea3d2;
+  --canvas-point: #cfd3d8;
+  --canvas-point-stroke: #0e1012;
+  --canvas-start: #74a07f;
+  --canvas-end: #b97474;
+  --canvas-handle: rgba(207, 211, 216, 0.45);
+  --canvas-handle-in: #80878f;
+  --canvas-ghost: rgba(207, 211, 216, 0.2);
+  --canvas-robot: #7ea3d2;
+  --canvas-sim: #c08a60;
+  --canvas-guide: #bf9d58;
+  --canvas-aim: #bf9d58;
+  --canvas-label-bg: rgba(14, 16, 18, 0.82);
+  --canvas-label-text: #cfd3d8;
+  --canvas-bump-hatch: rgba(207, 211, 216, 0.12);
+  --canvas-path-light-slow: 38;
+  --canvas-path-light-fast: 62;
+}

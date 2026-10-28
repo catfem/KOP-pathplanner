@@ -24,10 +24,22 @@ export interface UiState {
   sim: SimSettings;
   codeOpen: boolean;
   helpOpen: boolean;
+  /** Layout: side panels and the speed chart can be collapsed to give the field room. */
+  sidebarOpen: boolean;
+  inspectorOpen: boolean;
+  chartOpen: boolean;
   playing: boolean;
   time: number;
   speed: number;
   theme: ThemeChoice;
+}
+
+export type ToastLevel = 'info' | 'error';
+
+export interface Toast {
+  id: number;
+  message: string;
+  level: ToastLevel;
 }
 
 export interface State {
@@ -36,7 +48,7 @@ export interface State {
   past: Project[];
   future: Project[];
   fieldImage: string | null;
-  toast: string | null;
+  toast: Toast | null;
 }
 
 const PROJECT_KEY = 'kop-pathplanner:project';
@@ -113,6 +125,18 @@ function normalizeWaypoint(w: Partial<Waypoint>, i: number): Waypoint {
   };
 }
 
+/** Saved simulator settings, with anything that is not a sensible number reset to the default. */
+export function normalizeSim(raw: unknown): SimSettings {
+  const out = { ...DEFAULT_SIM };
+  if (raw && typeof raw === 'object') {
+    for (const key of Object.keys(DEFAULT_SIM) as (keyof SimSettings)[]) {
+      const v = (raw as Record<string, unknown>)[key];
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 10) out[key] = v;
+    }
+  }
+  return out;
+}
+
 function loadInitial(): State {
   let project: Project;
   const saved = safeGet(PROJECT_KEY);
@@ -142,9 +166,12 @@ function loadInitial(): State {
       showGuides: savedUi.showGuides ?? true,
       tab: savedUi.tab ?? 'point',
       showSim: savedUi.showSim ?? true,
-      sim: { ...DEFAULT_SIM, ...(savedUi.sim ?? {}) },
+      sim: normalizeSim(savedUi.sim),
       codeOpen: false,
       helpOpen: !saved,
+      sidebarOpen: savedUi.sidebarOpen ?? true,
+      inspectorOpen: savedUi.inspectorOpen ?? true,
+      chartOpen: savedUi.chartOpen ?? true,
       playing: false,
       time: 0,
       speed: 1,
@@ -166,13 +193,37 @@ function emit(): void {
   for (const l of listeners) l();
 }
 
+let saveFailed = false;
+
+/** Writes the project and UI preferences to localStorage now. */
+export function flushSave(): void {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  const ok = safeSet(PROJECT_KEY, JSON.stringify(state.project));
+  const { selectedAutoId, newPointStyle, snap, showGuides, tab, showSim, sim, theme, sidebarOpen, inspectorOpen, chartOpen } = state.ui;
+  safeSet(
+    UI_KEY,
+    JSON.stringify({ selectedAutoId, newPointStyle, snap, showGuides, tab, showSim, sim, theme, sidebarOpen, inspectorOpen, chartOpen }),
+  );
+  if (!ok && !saveFailed) {
+    showToast('Autosave failed: browser storage is full or blocked. Use Project → Save project file to keep your work.', 'error');
+  }
+  saveFailed = !ok;
+}
+
 function scheduleSave(): void {
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    safeSet(PROJECT_KEY, JSON.stringify(state.project));
-    const { selectedAutoId, newPointStyle, snap, showGuides, tab, showSim, sim, theme } = state.ui;
-    safeSet(UI_KEY, JSON.stringify({ selectedAutoId, newPointStyle, snap, showGuides, tab, showSim, sim, theme }));
-  }, 300);
+  saveTimer = setTimeout(flushSave, 300);
+}
+
+// Never lose the last edits when the tab is closed or hidden.
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', flushSave);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushSave();
+  });
 }
 
 export function getState(): State {
@@ -221,6 +272,16 @@ export function checkpoint(): void {
   setState({ ...state, past: [...state.past, state.project].slice(-HISTORY_LIMIT), future: [] });
 }
 
+/** Drops back to the last checkpoint without leaving an undo/redo step (cancelled drag). */
+export function revertCheckpoint(): void {
+  if (!state.past.length) return;
+  const prev = state.past[state.past.length - 1];
+  lastCoalesce = null;
+  setState({ ...state, project: prev, past: state.past.slice(0, -1) });
+  fixSelection();
+  scheduleSave();
+}
+
 export function undo(): void {
   if (!state.past.length) return;
   const prev = state.past[state.past.length - 1];
@@ -258,7 +319,10 @@ export function setUi(patch: Partial<UiState>): void {
     'tab' in patch ||
     'showSim' in patch ||
     'sim' in patch ||
-    'theme' in patch
+    'theme' in patch ||
+    'sidebarOpen' in patch ||
+    'inspectorOpen' in patch ||
+    'chartOpen' in patch
   ) {
     scheduleSave();
   }
@@ -281,10 +345,22 @@ export function setFieldImage(dataUrl: string | null): boolean {
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
-export function showToast(message: string): void {
+let toastId = 0;
+
+/** Shows a short message; errors stay longer. */
+export function showToast(message: string, level: ToastLevel = 'info'): void {
   if (toastTimer) clearTimeout(toastTimer);
-  setState({ ...state, toast: message });
-  toastTimer = setTimeout(() => setState({ ...state, toast: null }), 3000);
+  toastId += 1;
+  const id = toastId;
+  setState({ ...state, toast: { id, message, level } });
+  toastTimer = setTimeout(() => {
+    if (state.toast?.id === id) setState({ ...state, toast: null });
+  }, level === 'error' ? 8000 : 3500);
+}
+
+export function dismissToast(): void {
+  if (toastTimer) clearTimeout(toastTimer);
+  setState({ ...state, toast: null });
 }
 
 export function selectedAuto(s: State = state): Auto | undefined {

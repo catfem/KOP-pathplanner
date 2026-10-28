@@ -1,7 +1,7 @@
-import { setUi, useStore } from '../model/store';
-import { effectiveEncoder } from '../model/hardware';
-import { DEFAULT_SIM, type SimResult, type SimSettings } from '../planner/simulate';
-import { Checkbox, Section } from './controls';
+import { setUi, useStore } from '../../model/store';
+import { effectiveEncoder } from '../../model/hardware';
+import { DEFAULT_SIM, type SimResult, type SimSettings } from '../../planner/simulate';
+import { Checkbox, Section } from '../components/controls';
 
 function Slider({ label, value, min, max, step, onChange, format }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format: (v: number) => string }) {
   return (
