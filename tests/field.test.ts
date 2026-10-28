@@ -125,3 +125,12 @@ describe('NEO support', () => {
     }
   });
 });
+
+describe('stored settings', () => {
+  it('drops corrupt simulator settings', async () => {
+    const { normalizeSim } = await import('../src/model/store');
+    const { DEFAULT_SIM } = await import('../src/planner/simulate');
+    expect(normalizeSim({ leftScale: 'x', rightScale: Number.NaN, kSScale: 1.2, trackScale: -1 })).toEqual({ ...DEFAULT_SIM, kSScale: 1.2 });
+    expect(normalizeSim(null)).toEqual(DEFAULT_SIM);
+  });
+});

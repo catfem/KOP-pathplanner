@@ -40,6 +40,14 @@ controller encoders, or no sensors at all.
   presets set motors, controllers, encoders and estimated kV/kA together.
 - Projects autosave in the browser and can be saved/opened as files. PathPlanner `.path` files
   can be imported.
+- **Calm, low-glare interface**: flat surfaces, no glows or gradients, muted field colors and a
+  soft dark mode (follows the system or pick one). Both side panels collapse to give the field
+  the whole window, and the speed chart can be hidden.
+- **Built to survive mistakes**: every area has its own error boundary with a one-click project
+  backup, a planning error shows a banner instead of a blank screen, Esc cancels a drag, deleting
+  asks first (and undo brings it back), invalid numbers are flagged without touching the robot,
+  and the project is saved again when the tab is hidden or closed. Dialogs, menus and tabs work
+  with the keyboard.
 
 ## Getting started
 
@@ -113,6 +121,7 @@ embedded in the source code, so there are no deploy files to forget.
 npm run dev             # dev server
 npm run typecheck       # TypeScript
 npm test                # planner, simulator, codegen and editor unit tests (Vitest)
+npm run test:e2e        # browser tests of the editor, dialogs and layout (Playwright, Chromium)
 npm run build           # production build
 npm run verify:codegen  # end-to-end check of the generated robot code (see below)
 ```
@@ -128,15 +137,25 @@ combination, then:
   stopped.
 
 It needs a JDK and `pip install -r tools/verify/requirements.txt`. CI runs it on every pull
-request.
+request, together with the unit and browser tests. Before the first `npm run test:e2e`, run
+`npx playwright install chromium` once.
 
 ```
 src/
   model/      data types, defaults, store (undo/redo, autosave), editing operations
   planner/    geometry, trajectory generation, follower physics simulation
   codegen/    Java + Python generators, zip writer
-  ui/         React components (field canvas, timeline, chart, inspector panels, modals)
+  styles/     design tokens (light/dark), base, component and layout CSS
+  ui/
+    components/  shared building blocks: modal, menu, tabs, confirm, toasts, error boundary, fields
+    field/       field canvas (interaction) and its renderer
+    hooks/       planning, playback, keyboard shortcuts, theme
+    layout/      header, autos sidebar, inspector
+    panels/      Point, Auto, Robot, Field and Simulate tabs
+    timeline/    playback bar, step bar and speed/voltage chart
+    modals/      generated code and help dialogs
 tests/        Vitest unit tests
+e2e/          Playwright browser tests
 tools/verify/ generated-code verification (javac stubs, Java harness, RobotPy simulation)
 ```
 

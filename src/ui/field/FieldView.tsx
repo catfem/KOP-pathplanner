@@ -1,24 +1,37 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { appendWaypoint, dragHandle, insertWaypoint, nearestOnPath, round } from '../model/edit';
-import { checkpoint, setUi, updateAuto, useStore } from '../model/store';
-import type { Auto } from '../model/types';
-import { type Vec, angleOf, bezierPoint, sub } from '../planner/geometry';
-import type { SimResult } from '../planner/simulate';
-import { type Plan, segmentBezier } from '../planner/trajectory';
-import { IconButton, Segmented } from './controls';
-import { type HitTarget, type View, fitView, hitTest, readPalette, renderField, speedColor, toField } from './fieldRender';
-import { IconCurve, IconFit, IconLine, IconMagnet, IconPlus, IconPointer, IconRuler } from './icons';
+import { appendWaypoint, dragHandle, insertWaypoint, nearestOnPath, round } from '../../model/edit';
+import { checkpoint, revertCheckpoint, setUi, updateAuto, useStore } from '../../model/store';
+import type { Auto } from '../../model/types';
+import { type Vec, angleOf, bezierPoint, sub } from '../../planner/geometry';
+import type { SimResult } from '../../planner/simulate';
+import { type Plan, segmentBezier } from '../../planner/trajectory';
+import { IconButton, Segmented } from '../components/controls';
+import { IconCurve, IconFit, IconLine, IconMagnet, IconPlus, IconPointer, IconRuler } from '../components/icons';
+import { type HitTarget, type RenderInput, type View, fitView, hitTest, readPalette, renderField, speedColor, toField } from './render';
 
 type Drag =
-  | { kind: 'point'; index: number; offset: Vec }
-  | { kind: 'handle'; index: number; which: 'in' | 'out' }
-  | { kind: 'facing'; index: number }
+  | { kind: 'point'; index: number; offset: Vec; changed: boolean }
+  | { kind: 'handle'; index: number; which: 'in' | 'out'; changed: boolean }
+  | { kind: 'facing'; index: number; changed: boolean }
   | { kind: 'pan'; start: Vec; view: View; moved: boolean };
 
 const SNAP_POS = 0.05;
 const SNAP_DEG = 15;
+const MIN_SCALE = 8;
+const MAX_SCALE = 600;
 
-export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | null }) {
+function pointOnSegment(auto: Auto, segment: number, t: number): Vec {
+  return bezierPoint(segmentBezier(auto.waypoints[segment], auto.waypoints[segment + 1]), t);
+}
+
+interface Props {
+  plan: Plan | null;
+  sim: SimResult | null;
+  /** Planner failure to show over the field. */
+  planError?: string | null;
+}
+
+export function FieldView({ plan, sim, planError }: Props) {
   const project = useStore((s) => s.project);
   const ui = useStore((s) => s.ui);
   const fieldImage = useStore((s) => s.fieldImage);
@@ -31,26 +44,34 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
   const [hover, setHover] = useState<HitTarget | null>(null);
   const [cursor, setCursor] = useState<Vec | null>(null);
   const [insertPreview, setInsertPreview] = useState<Vec | null>(null);
+  const [dragging, setDragging] = useState(false);
   const drag = useRef<Drag | null>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
 
+  // ---- Field image ----
   useEffect(() => {
     if (!fieldImage) {
       setImage(null);
       return;
     }
+    let alive = true;
     const img = new Image();
-    img.onload = () => setImage(img);
+    img.onload = () => alive && setImage(img);
+    img.onerror = () => alive && setImage(null);
     img.src = fieldImage;
+    return () => {
+      alive = false;
+    };
   }, [fieldImage]);
 
-  // Track container size.
+  // ---- Size and view ----
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
+    const measure = () => setSize({ w: Math.max(0, el.clientWidth), h: Math.max(0, el.clientHeight) });
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
     return () => ro.disconnect();
   }, []);
 
@@ -60,42 +81,73 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
   }, [size.w, size.h, project.field]);
 
   useEffect(() => {
-    if (!userMovedView.current || !view) fit();
     // Refit when the field size changes or the container resizes (unless the user zoomed).
+    if (!userMovedView.current || !view) fit();
   }, [size.w, size.h, project.field.length, project.field.width]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Draw.
-  useLayoutEffect(() => {
+  // ---- Drawing: at most once per animation frame, always with the latest input ----
+  const input = useRef<Omit<RenderInput, 'palette'> | null>(null);
+  const frame = useRef(0);
+  const draw = useCallback(() => {
+    frame.current = 0;
     const canvas = canvasRef.current;
-    if (!canvas || !view || size.w === 0) return;
+    const data = input.current;
+    if (!canvas || !data || data.width <= 0 || data.height <= 0) return;
     const dpr = window.devicePixelRatio || 1;
-    if (canvas.width !== Math.round(size.w * dpr) || canvas.height !== Math.round(size.h * dpr)) {
-      canvas.width = Math.round(size.w * dpr);
-      canvas.height = Math.round(size.h * dpr);
+    const w = Math.round(data.width * dpr);
+    const h = Math.round(data.height * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
     }
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderField(ctx, {
-      view,
-      width: size.w,
-      height: size.h,
-      field: project.field,
-      image,
-      robot: project.robot,
-      auto,
-      plan,
-      sim,
-      selected: ui.selectedIndex,
-      hover,
-      time: ui.time,
-      palette: readPalette(canvas),
-      insertPreview,
-      showGuides: ui.showGuides,
-    });
-  });
+    try {
+      renderField(ctx, { ...data, palette: readPalette(document.documentElement) });
+    } catch (err) {
+      // A drawing bug must not take the editor down; log it and keep going.
+      console.error('KOP Path Planner: field drawing failed', err);
+    }
+  }, []);
+  const requestDraw = useCallback(() => {
+    if (!frame.current) frame.current = requestAnimationFrame(draw);
+  }, [draw]);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
 
-  // Wheel zoom (non-passive so the page does not scroll).
+  input.current = view
+    ? {
+        view,
+        width: size.w,
+        height: size.h,
+        field: project.field,
+        image,
+        robot: project.robot,
+        auto,
+        plan,
+        sim,
+        selected: ui.selectedIndex,
+        hover,
+        time: ui.time,
+        insertPreview,
+        showGuides: ui.showGuides,
+      }
+    : null;
+  useEffect(requestDraw);
+
+  // Redraw when the theme or the screen's pixel ratio changes.
+  useEffect(() => {
+    const dark = window.matchMedia?.('(prefers-color-scheme: dark)');
+    const dpr = window.matchMedia?.(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    dark?.addEventListener('change', requestDraw);
+    dpr?.addEventListener('change', requestDraw);
+    return () => {
+      dark?.removeEventListener('change', requestDraw);
+      dpr?.removeEventListener('change', requestDraw);
+    };
+  }, [requestDraw]);
+
+  // ---- Zoom ----
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -106,8 +158,8 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
         const rect = canvas.getBoundingClientRect();
         const s = { x: e.clientX - rect.left, y: e.clientY - rect.top };
         const f = toField(v, s);
-        const factor = Math.exp(-e.deltaY * 0.0015);
-        const scale = Math.max(8, Math.min(600, v.scale * factor));
+        const delta = Math.max(-200, Math.min(200, e.deltaY));
+        const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * Math.exp(-delta * 0.0015)));
         userMovedView.current = true;
         return { scale, ox: s.x - f.x * scale, oy: s.y + f.y * scale };
       });
@@ -116,6 +168,32 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
     return () => canvas.removeEventListener('wheel', onWheel);
   }, []);
 
+  // ---- Dragging ----
+  const endDrag = useCallback(() => {
+    drag.current = null;
+    setDragging(false);
+  }, []);
+
+  /** Escape cancels a drag in progress and puts the point back. */
+  useEffect(() => {
+    if (!dragging) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const d = drag.current;
+      e.stopPropagation();
+      e.preventDefault();
+      if (d && d.kind !== 'pan' && d.changed) revertCheckpoint();
+      endDrag();
+    };
+    const onBlur = () => endDrag();
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [dragging, endDrag]);
+
   const localPoint = (e: React.PointerEvent | React.MouseEvent): Vec => {
     const rect = canvasRef.current!.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -123,37 +201,44 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
 
   const snapPos = (p: Vec): Vec => (ui.snap ? { x: round(p.x, SNAP_POS), y: round(p.y, SNAP_POS) } : p);
 
+  const startDrag = (e: React.PointerEvent<HTMLCanvasElement>, d: Drag) => {
+    drag.current = d;
+    setDragging(true);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Capture can fail for synthetic events; dragging still works while over the canvas.
+    }
+  };
+
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!view) return;
+    if (!view || drag.current) return;
     const s = localPoint(e);
     const f = toField(view, s);
-    (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
     if (e.button === 1 || e.button === 2 || !auto) {
-      drag.current = { kind: 'pan', start: s, view, moved: false };
+      startDrag(e, { kind: 'pan', start: s, view, moved: false });
       return;
     }
+    if (e.button !== 0) return;
     const hit = hitTest(view, project.robot, auto, ui.selectedIndex, s);
     if (hit?.kind === 'point') {
       setUi({ selectedIndex: hit.index, tab: 'point' });
-      checkpoint();
       const w = auto.waypoints[hit.index];
       if (e.altKey && hit.index < auto.waypoints.length - 1) {
-        drag.current = { kind: 'handle', index: hit.index, which: 'out' };
+        startDrag(e, { kind: 'handle', index: hit.index, which: 'out', changed: false });
       } else {
-        drag.current = { kind: 'point', index: hit.index, offset: sub(f, w) };
+        startDrag(e, { kind: 'point', index: hit.index, offset: sub(f, w), changed: false });
       }
       return;
     }
     if (hit?.kind === 'handle') {
       setUi({ selectedIndex: hit.index, tab: 'point' });
-      checkpoint();
-      drag.current = { kind: 'handle', index: hit.index, which: hit.which };
+      startDrag(e, { kind: 'handle', index: hit.index, which: hit.which, changed: false });
       return;
     }
     if (hit?.kind === 'facing') {
       setUi({ selectedIndex: hit.index, tab: 'point' });
-      checkpoint();
-      drag.current = { kind: 'facing', index: hit.index };
+      startDrag(e, { kind: 'facing', index: hit.index, changed: false });
       return;
     }
     if (ui.tool === 'add') {
@@ -165,7 +250,7 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
       setUi({ selectedIndex: index, tab: 'point' });
       return;
     }
-    drag.current = { kind: 'pan', start: s, view, moved: false };
+    startDrag(e, { kind: 'pan', start: s, view, moved: false });
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -190,9 +275,16 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
       const dx = s.x - d.start.x;
       const dy = s.y - d.start.y;
       if (Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
-      userMovedView.current = true;
-      setView({ ...d.view, ox: d.view.ox + dx, oy: d.view.oy + dy });
+      if (d.moved) {
+        userMovedView.current = true;
+        setView({ ...d.view, ox: d.view.ox + dx, oy: d.view.oy + dy });
+      }
       return;
+    }
+    // The undo step is recorded on the first real move, so a plain click adds no history.
+    if (!d.changed) {
+      checkpoint();
+      d.changed = true;
     }
     const snapAngle = ui.snap || e.shiftKey ? SNAP_DEG : null;
     updateAuto(
@@ -205,7 +297,7 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
           w.y = p.y;
         } else if (d.kind === 'handle') {
           dragHandle(w, d.which, f, snapAngle, d.index === 0, d.index === a.waypoints.length - 1);
-        } else if (d.kind === 'facing') {
+        } else {
           let angle = angleOf(sub(f, w));
           if (snapAngle) angle = round(angle, snapAngle);
           w.facing = angle;
@@ -217,9 +309,9 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
 
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const d = drag.current;
-    drag.current = null;
+    endDrag();
     try {
-      (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+      e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {
       // Pointer capture may already be gone.
     }
@@ -243,17 +335,10 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
     }
   };
 
-  const cursorStyle = drag.current
-    ? 'grabbing'
-    : hover
-      ? 'grab'
-      : insertPreview
-        ? 'copy'
-        : ui.tool === 'add'
-          ? 'crosshair'
-          : 'default';
-
+  const cursorStyle = dragging ? 'grabbing' : hover ? 'grab' : insertPreview ? 'copy' : ui.tool === 'add' ? 'crosshair' : 'default';
   const vmax = project.robot.maxVelocity;
+  const palette = readPalette(document.documentElement);
+
   return (
     <div className="field-view" ref={containerRef}>
       <canvas
@@ -263,6 +348,8 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
         onPointerLeave={() => {
           setCursor(null);
           setHover(null);
@@ -305,12 +392,17 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
           <IconFit />
         </IconButton>
       </div>
+      {planError && (
+        <div className="field-banner" role="alert">
+          Could not plan this auto: {planError}
+        </div>
+      )}
       <div className="field-legend" aria-hidden>
         <div className="legend-row">
           <span className="legend-label">Speed</span>
           <span
             className="speed-bar"
-            style={{ background: `linear-gradient(90deg, ${speedColor(0)}, ${speedColor(0.5)}, ${speedColor(1)})` }}
+            style={{ background: `linear-gradient(90deg, ${speedColor(0, palette)}, ${speedColor(1, palette)})` }}
           />
           <span className="legend-value">0–{vmax.toFixed(1)} m/s</span>
         </div>
@@ -325,12 +417,12 @@ export function FieldView({ plan, sim }: { plan: Plan | null; sim: SimResult | n
         </div>
       </div>
       <div className="field-status">
-        {cursor ? `x ${cursor.x.toFixed(2)} m · y ${cursor.y.toFixed(2)} m` : ui.tool === 'add' ? 'Click to add a point' : 'Drag points/handles · double-click path to insert · Alt-drag a point to pull a handle'}
+        {cursor
+          ? `x ${cursor.x.toFixed(2)} m · y ${cursor.y.toFixed(2)} m`
+          : ui.tool === 'add'
+            ? 'Click to add a point'
+            : 'Drag points/handles · double-click path to insert · Alt-drag a point to pull a handle · Esc cancels a drag'}
       </div>
     </div>
   );
-}
-
-function pointOnSegment(auto: Auto, segment: number, t: number): Vec {
-  return bezierPoint(segmentBezier(auto.waypoints[segment], auto.waypoints[segment + 1]), t);
 }

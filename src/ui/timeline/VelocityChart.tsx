@@ -1,8 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { setUi, useStore } from '../model/store';
-import type { RobotConfig } from '../model/types';
-import { type Plan, feedforwardVolts } from '../planner/trajectory';
-import { Segmented } from './controls';
+import { setUi, useStore } from '../../model/store';
+import type { RobotConfig } from '../../model/types';
+import { type Plan, feedforwardVolts } from '../../planner/trajectory';
+import { Segmented } from '../components/controls';
 
 type Mode = 'velocity' | 'voltage';
 
@@ -147,7 +147,7 @@ export function VelocityChart({ plan }: { plan: Plan | null }) {
     // Gridlines and y ticks.
     const step = niceStep(yRange.max - yRange.min, 4);
     ctx.font = '11px system-ui, sans-serif';
-    ctx.fillStyle = css('--muted');
+    ctx.fillStyle = css('--text-3');
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     for (let v = Math.ceil(yRange.min / step) * step; v <= yRange.max; v += step) {
@@ -195,7 +195,7 @@ export function VelocityChart({ plan }: { plan: Plan | null }) {
     // Crosshair.
     if (hoverIndex !== null) {
       const hx = Math.round(xOf(data.times[hoverIndex])) + 0.5;
-      ctx.strokeStyle = css('--muted');
+      ctx.strokeStyle = css('--text-3');
       ctx.beginPath();
       ctx.moveTo(hx, PAD.top);
       ctx.lineTo(hx, height - PAD.bottom);
@@ -205,7 +205,7 @@ export function VelocityChart({ plan }: { plan: Plan | null }) {
         ctx.arc(hx, yOf(s.values[hoverIndex]), 4, 0, Math.PI * 2);
         ctx.fillStyle = s.color;
         ctx.fill();
-        ctx.strokeStyle = css('--panel');
+        ctx.strokeStyle = css('--surface');
         ctx.lineWidth = 2;
         ctx.stroke();
       }

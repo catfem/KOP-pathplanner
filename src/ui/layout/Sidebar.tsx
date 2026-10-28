@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { makeWaypoint, newId } from '../model/defaults';
-import { duplicateAuto, uniqueAutoName } from '../model/edit';
-import { setUi, updateProject, useStore } from '../model/store';
-import { IconButton, NumberField } from './controls';
-import { IconDuplicate, IconPlus, IconTrash, IconX } from './icons';
+import { makeWaypoint, newId } from '../../model/defaults';
+import { duplicateAuto, uniqueAutoName } from '../../model/edit';
+import { getState, setUi, updateProject, useStore } from '../../model/store';
+import { confirmAction } from '../components/Confirm';
+import { IconButton, NumberField } from '../components/controls';
+import { IconDuplicate, IconPlus, IconTrash, IconX } from '../components/icons';
 
 export function Sidebar() {
   const autos = useStore((s) => s.project.autos);
@@ -85,13 +86,20 @@ export function Sidebar() {
                   title="Delete"
                   danger
                   disabled={autos.length <= 1}
-                  onClick={() => {
-                    if (!window.confirm(`Delete auto “${a.name}”? (Undo with Ctrl+Z)`)) return;
-                    const rest = autos.filter((x) => x.id !== a.id);
+                  onClick={async () => {
+                    const ok = await confirmAction({
+                      title: `Delete “${a.name}”?`,
+                      message: 'The auto and its points are removed. Undo (Ctrl+Z) brings it back.',
+                      confirmLabel: 'Delete auto',
+                      danger: true,
+                    });
+                    // Re-read the state: it may have changed while the dialog was open.
+                    const rest = getState().project.autos.filter((x) => x.id !== a.id);
+                    if (!ok || rest.length === 0) return;
                     updateProject((p) => {
                       p.autos = p.autos.filter((x) => x.id !== a.id);
                     });
-                    if (a.id === selectedId) setUi({ selectedAutoId: rest[0].id, selectedIndex: null });
+                    if (getState().ui.selectedAutoId === a.id) setUi({ selectedAutoId: rest[0].id, selectedIndex: null });
                   }}
                 >
                   <IconTrash />

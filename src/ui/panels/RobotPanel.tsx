@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { INCH, MOTORS, estimateFeedforward, freeSpeed } from '../model/defaults';
-import { CONTROLLERS, DRIVETRAIN_PRESETS, ENCODER_LABELS, effectiveEncoder, motorControllerIssue } from '../model/hardware';
-import { showToast, updateProject, useStore } from '../model/store';
-import type { ControllerType, EncoderType, Language, MotorType, RobotConfig } from '../model/types';
-import { Checkbox, IntListField, NumberField, Section, SelectField, TextField } from './controls';
+import { INCH, MOTORS, estimateFeedforward, freeSpeed } from '../../model/defaults';
+import { CONTROLLERS, DRIVETRAIN_PRESETS, ENCODER_LABELS, effectiveEncoder, motorControllerIssue } from '../../model/hardware';
+import { showToast, updateProject, useStore } from '../../model/store';
+import type { ControllerType, EncoderType, Language, MotorType, RobotConfig } from '../../model/types';
+import { Checkbox, IntListField, NumberField, Section, SelectField, TextField } from '../components/controls';
 
 export function RobotPanel() {
   const robot = useStore((s) => s.project.robot);

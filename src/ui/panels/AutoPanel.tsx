@@ -1,8 +1,8 @@
-import { makeAllStraight, mirrorAuto } from '../model/edit';
-import { setUi, updateAuto, useStore } from '../model/store';
-import type { Auto } from '../model/types';
-import type { Plan, PlanStep } from '../planner/trajectory';
-import { Section, TextField } from './controls';
+import { makeAllStraight, mirrorAuto } from '../../model/edit';
+import { setUi, updateAuto, useStore } from '../../model/store';
+import type { Auto } from '../../model/types';
+import type { Plan, PlanStep } from '../../planner/trajectory';
+import { Section, TextField } from '../components/controls';
 
 function describe(st: PlanStep): string {
   switch (st.kind) {

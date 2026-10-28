@@ -1,6 +1,7 @@
-import { setUi, useStore } from '../model/store';
-import { type Plan, type PlanStep, sampleAt } from '../planner/trajectory';
-import { IconPause, IconPlay, IconRestart } from './icons';
+import { setUi, useStore } from '../../model/store';
+import { type Plan, type PlanStep, sampleAt } from '../../planner/trajectory';
+import { IconButton } from '../components/controls';
+import { IconChart, IconPause, IconPlay, IconRestart } from '../components/icons';
 
 function stepLabel(st: PlanStep): string {
   switch (st.kind) {
@@ -21,6 +22,7 @@ export function Timeline({ plan }: { plan: Plan | null }) {
   const speed = useStore((s) => s.ui.speed);
   const autoPeriod = useStore((s) => s.project.codegen.autoPeriod);
   const field = useStore((s) => s.project.field);
+  const chartOpen = useStore((s) => s.ui.chartOpen);
   const total = plan?.totalTime ?? 0;
   const state = plan ? sampleAt(plan, time) : null;
   const hubs = field.elementsEnabled ? field.elements.filter((e) => e.kind === 'hub') : [];
@@ -47,6 +49,9 @@ export function Timeline({ plan }: { plan: Plan | null }) {
         <button type="button" className="btn ghost icon-only" onClick={() => setUi({ time: 0, playing: false })} title="Back to start" aria-label="Back to start">
           <IconRestart />
         </button>
+        <IconButton title={chartOpen ? 'Hide speed chart' : 'Show speed chart'} active={chartOpen} onClick={() => setUi({ chartOpen: !chartOpen })}>
+          <IconChart />
+        </IconButton>
         <select className="speed-select" value={speed} onChange={(e) => setUi({ speed: Number(e.target.value) })} aria-label="Playback speed">
           {[0.25, 0.5, 1, 2, 4].map((s) => (
             <option key={s} value={s}>

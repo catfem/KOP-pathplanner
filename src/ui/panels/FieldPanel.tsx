@@ -1,8 +1,8 @@
-import { FIELD_PRESETS } from '../model/defaults';
-import { elementLabel, presetElements, rebuilt2026Elements } from '../model/field';
-import { setFieldImage, setUi, showToast, updateProject, useStore } from '../model/store';
-import type { FieldElement } from '../model/types';
-import { Checkbox, NumberField, Section, SelectField } from './controls';
+import { FIELD_PRESETS } from '../../model/defaults';
+import { elementLabel, presetElements, rebuilt2026Elements } from '../../model/field';
+import { setFieldImage, setUi, showToast, updateProject, useStore } from '../../model/store';
+import type { FieldElement } from '../../model/types';
+import { Checkbox, NumberField, Section, SelectField } from '../components/controls';
 
 function ElementEditor({ element, index, showSize }: { element: FieldElement; index: number; showSize: boolean }) {
   const set = (key: 'x' | 'y' | 'sizeX' | 'sizeY', v: number) =>

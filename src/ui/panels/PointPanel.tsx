@@ -1,12 +1,12 @@
-import { newId } from '../model/defaults';
-import { deleteWaypoint, makeStraight, setStop } from '../model/edit';
-import { setUi, updateAuto, updateProject, useStore } from '../model/store';
-import type { Action, Auto, Project } from '../model/types';
-import { KIND_LABELS, bumperAgainst, bumperDistances, bumperGap, elementLabel, formatDistance } from '../model/field';
-import { wrapDeg } from '../planner/geometry';
-import type { Plan } from '../planner/trajectory';
-import { Checkbox, IconButton, NumberField, Section, Segmented, SelectField } from './controls';
-import { IconChevronLeft, IconChevronRight, IconDown, IconTrash, IconUp, IconX } from './icons';
+import { newId } from '../../model/defaults';
+import { deleteWaypoint, makeStraight, setStop } from '../../model/edit';
+import { setUi, updateAuto, updateProject, useStore } from '../../model/store';
+import type { Action, Auto, Project } from '../../model/types';
+import { KIND_LABELS, bumperAgainst, bumperDistances, bumperGap, elementLabel, formatDistance } from '../../model/field';
+import { wrapDeg } from '../../planner/geometry';
+import type { Plan } from '../../planner/trajectory';
+import { Checkbox, IconButton, NumberField, Section, Segmented, SelectField } from '../components/controls';
+import { IconChevronLeft, IconChevronRight, IconDown, IconTrash, IconUp, IconX } from '../components/icons';
 
 /** True when the robot drives backwards on the segment that ends at waypoint index. */
 function arrivesReversed(auto: Auto, index: number): boolean {
