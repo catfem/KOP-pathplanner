@@ -1,11 +1,19 @@
 import { useMemo } from 'react';
+import { effectiveEncoder } from '../../model/hardware';
 import type { Auto, Project } from '../../model/types';
 import { type SimResult, type SimSettings, simulatePlan } from '../../planner/simulate';
 import { type Plan, planAuto } from '../../planner/trajectory';
 
+/** The same imperfect robot run the other way: open loop if the robot has encoders, with encoders if not. */
+export interface SimComparison {
+  withEncoders: boolean;
+  result: SimResult;
+}
+
 export interface Planning {
   plan: Plan | null;
   sim: SimResult | null;
+  comparison: SimComparison | null;
   /** Set when the planner or simulator threw; the UI shows it instead of crashing. */
   error: string | null;
 }
@@ -39,5 +47,16 @@ export function usePlanning(auto: Auto | undefined, project: Project, showSim: b
     }
   }, [planned.plan, showSim, project.robot, simSettings]);
 
-  return { plan: planned.plan, sim, error: planned.error };
+  const comparison = useMemo((): SimComparison | null => {
+    if (!planned.plan || !showSim) return null;
+    const withEncoders = effectiveEncoder(project.robot) === 'none';
+    try {
+      const robot = { ...project.robot, encoder: withEncoders ? ('rio' as const) : ('none' as const) };
+      return { withEncoders, result: simulatePlan(planned.plan, robot, simSettings) };
+    } catch {
+      return null;
+    }
+  }, [planned.plan, showSim, project.robot, simSettings]);
+
+  return { plan: planned.plan, sim, comparison, error: planned.error };
 }

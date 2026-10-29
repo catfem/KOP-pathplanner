@@ -439,6 +439,26 @@ input[type='text'],
   color: var(--good);
 }
 
+.sim-compare {
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
+.sim-compare .bad,
+.warning .bad {
+  color: var(--danger);
+}
+
+.sim-compare .meh,
+.warning .meh {
+  color: var(--warn);
+}
+
+.sim-compare .good,
+.warning .good {
+  color: var(--good);
+}
+
 .badge {
   display: inline-block;
   padding: 0 6px;

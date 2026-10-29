@@ -261,6 +261,18 @@ test('robot configs: save, load back, keep across reloads, download and load fro
   await expect(list).toContainText('In use');
 });
 
+test('simulation plays until the simulated robot finishes and shows what the correction does', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Simulate' }).click();
+  // A robot heavier and slower than planned: the generated code waits for it.
+  await page.getByLabel('Heavier than planned (kA)').fill('1.8');
+  await page.getByLabel('Slower than planned (kV)').fill('1.3');
+  await expect(page.locator('.time-readout')).toContainText('simulated robot');
+  const scrubber = page.getByLabel('Timeline position');
+  const plannedEnd = Number((await page.locator('.time-readout span').first().textContent())?.replace(/[^\d.]/g, ''));
+  expect(Number(await scrubber.getAttribute('max'))).toBeGreaterThan(plannedEnd + 0.5);
+  await expect(page.locator('.sim-compare')).toContainText('Without it, this robot would stray up to');
+});
+
 test.describe('phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
   test('has no horizontal overflow', async ({ page }) => {

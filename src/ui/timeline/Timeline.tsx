@@ -16,7 +16,11 @@ function stepLabel(st: PlanStep): string {
   }
 }
 
-export function Timeline({ plan }: { plan: Plan | null }) {
+/**
+ * `endTime` is where playback stops: the end of the plan, or later when the simulated robot
+ * (`simEnd`) needs longer.
+ */
+export function Timeline({ plan, endTime, simEnd }: { plan: Plan | null; endTime: number; simEnd: number | null }) {
   const time = useStore((s) => s.ui.time);
   const playing = useStore((s) => s.ui.playing);
   const speed = useStore((s) => s.ui.speed);
@@ -28,7 +32,8 @@ export function Timeline({ plan }: { plan: Plan | null }) {
   const hubs = field.elementsEnabled ? field.elements.filter((e) => e.kind === 'hub') : [];
   const hubDistance =
     state && hubs.length ? Math.min(...hubs.map((h) => Math.hypot(h.x - state.x, h.y - state.y))) : null;
-  const scaleMax = Math.max(total, 0.001);
+  const scaleMax = Math.max(endTime, total, 0.001);
+  const simLate = simEnd !== null && simEnd > total + 0.05;
 
   return (
     <div className="timeline">
@@ -37,7 +42,7 @@ export function Timeline({ plan }: { plan: Plan | null }) {
           type="button"
           className="btn primary play"
           onClick={() => {
-            if (!playing && time >= total) setUi({ time: 0, playing: true });
+            if (!playing && time >= scaleMax) setUi({ time: 0, playing: true });
             else setUi({ playing: !playing });
           }}
           disabled={!plan || total <= 0}
@@ -63,6 +68,14 @@ export function Timeline({ plan }: { plan: Plan | null }) {
           <strong>{time.toFixed(2)}</strong>
           <span> / {total.toFixed(2)} s</span>
           {total > autoPeriod && <span className="badge error">over {autoPeriod}s</span>}
+          {simLate && (
+            <span
+              className="sim-time"
+              title="The simulated robot is slower than planned. The generated code waits for it instead of cutting corners, so it finishes later."
+            >
+              · simulated robot {(simEnd as number).toFixed(2)} s
+            </span>
+          )}
         </div>
         {state && (
           <div className="state-readout" aria-live="off">
@@ -87,7 +100,14 @@ export function Timeline({ plan }: { plan: Plan | null }) {
               <span>{stepLabel(st)}</span>
             </div>
           ))}
-          <div className="playhead" style={{ left: `${(Math.min(time, total) / scaleMax) * 100}%` }} />
+          {simLate && (
+            <div
+              className="sim-end"
+              style={{ left: `${((simEnd as number) / scaleMax) * 100}%` }}
+              title={`Simulated robot finishes at ${(simEnd as number).toFixed(2)} s`}
+            />
+          )}
+          <div className="playhead" style={{ left: `${(Math.min(time, scaleMax) / scaleMax) * 100}%` }} />
         </div>
         <input
           className="scrubber"
