@@ -3,8 +3,8 @@ import { defaultProject, defaultRobot, exampleAutos, makeWaypoint } from '../src
 import { rebuilt2026Elements } from '../src/model/field';
 import type { Auto, RobotConfig } from '../src/model/types';
 import { DEG } from '../src/planner/geometry';
-import { simulatePlan } from '../src/planner/simulate';
-import { type Plan, planAuto, sampleAt } from '../src/planner/trajectory';
+import { PERFECT_SIM, simulatePlan } from '../src/planner/simulate';
+import { type Plan, VOLTAGE_HEADROOM, planAuto, sampleAt, wheelSpeedLimit } from '../src/planner/trajectory';
 
 const robot: RobotConfig = defaultRobot();
 
@@ -221,11 +221,26 @@ describe('planAuto', () => {
   });
 });
 
+describe('voltage headroom', () => {
+  it('only plans wheel speeds the motors can hold with 2 V to spare', () => {
+    const slow = { ...robot, kV: 4, kS: 1 };
+    expect(wheelSpeedLimit(slow)).toBeCloseTo((12 - VOLTAGE_HEADROOM - 1) / 4, 6);
+    const plan = planAuto(exampleAutos()[0], slow);
+    for (const st of plan.steps) {
+      if (st.kind !== 'drive' && st.kind !== 'turn') continue;
+      for (const s of st.samples) expect(Math.max(Math.abs(s.lVel), Math.abs(s.rVel))).toBeLessThanOrEqual(wheelSpeedLimit(slow) + 1e-6);
+    }
+    expect(plan.warnings.some((w) => w.message.startsWith('Wheel speed is limited'))).toBe(true);
+    // The stock robot is not limited.
+    expect(wheelSpeedLimit(robot)).toBe(robot.maxVelocity);
+  });
+});
+
 describe('simulatePlan', () => {
   it('closed loop with a perfect model tracks the plan', () => {
     for (const a of exampleAutos()) {
       const plan = planAuto(a, robot);
-      const sim = simulatePlan(plan, robot, { leftScale: 1, rightScale: 1, kSScale: 1, trackScale: 1 });
+      const sim = simulatePlan(plan, robot, PERFECT_SIM);
       expect(sim.closedLoop).toBe(true);
       expect(sim.positionError).toBeLessThan(0.04);
       expect(Math.abs(sim.headingErrorDeg)).toBeLessThan(1.5);
@@ -234,7 +249,7 @@ describe('simulatePlan', () => {
 
   it('open loop with a perfect model still ends close', () => {
     const plan = planAuto(exampleAutos()[0], robot);
-    const sim = simulatePlan(plan, { ...robot, encoder: 'none' }, { leftScale: 1, rightScale: 1, kSScale: 1, trackScale: 1 });
+    const sim = simulatePlan(plan, { ...robot, encoder: 'none' }, PERFECT_SIM);
     expect(sim.closedLoop).toBe(false);
     expect(sim.positionError).toBeLessThan(0.08);
   });
@@ -242,7 +257,7 @@ describe('simulatePlan', () => {
   it('encoders reduce drift from a mismatched drivetrain', () => {
     // All-forward auto, so open-loop drift is not undone by driving back over the same path.
     const plan = planAuto(exampleAutos()[1], robot);
-    const settings = { leftScale: 0.9, rightScale: 1, kSScale: 1.2, trackScale: 1 };
+    const settings = { ...PERFECT_SIM, leftScale: 0.9, kSScale: 1.2 };
     const open = simulatePlan(plan, { ...robot, encoder: 'none' }, settings);
     const closed = simulatePlan(plan, robot, settings);
     expect(closed.positionError).toBeLessThan(open.positionError);

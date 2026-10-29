@@ -55,7 +55,7 @@ export function RobotPanel() {
           min={0.2}
           step={0.01}
           onChange={(v) => set('trackWidth', v)}
-          hint="Used for all turning math. Calibrate it: spin N turns in place, then (|left|+|right|) / (2π·N). Usually 5–20% more than the measured width on 6WD."
+          hint="Used for all turning math. Calibrate it with the generated “Test: turn 360°” auto: if the robot turns θ degrees instead of 360, multiply this by 360 / θ. Usually 5–20% more than the measured width on 6WD."
         />
         <div className="grid-2">
           <NumberField label="Wheel diameter" unit="in" value={robot.wheelDiameter / INCH} min={1} step={0.25} decimals={2} onChange={(v) => set('wheelDiameter', v * INCH)} />
@@ -218,9 +218,13 @@ export function RobotPanel() {
               <NumberField label="kD (velocity)" unit="V·s/m" value={robot.kD} min={0} step={0.1} onChange={(v) => set('kD', v)} />
               <NumberField label="kP turn (heading hold)" unit="V/m" value={robot.kPTurn} min={0} step={1} onChange={(v) => set('kPTurn', v)} />
               <NumberField label="Path correction" unit="1/m" value={robot.kLateral} min={0} step={0.5} onChange={(v) => set('kLateral', v)} />
-              <NumberField label="Tolerance" unit="m" value={robot.positionTolerance} min={0.005} step={0.005} onChange={(v) => set('positionTolerance', v)} />
+              <NumberField label="Distance tolerance" unit="m" value={robot.positionTolerance} min={0.005} step={0.005} onChange={(v) => set('positionTolerance', v)} />
               <NumberField label="Max settle time" unit="s" value={robot.maxSettleTime} min={0} step={0.05} onChange={(v) => set('maxSettleTime', v)} />
             </div>
+            <p className="muted small">
+              The follower waits for the robot when it falls behind, pushes harder on a wheel stuck short of its target, and stops using
+              encoders that read backwards or not at all (the auto then finishes open loop and the Driver Station shows the fix).
+            </p>
           </>
         )}
       </Section>

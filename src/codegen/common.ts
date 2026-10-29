@@ -1,8 +1,9 @@
 // Language-neutral description of the generated autos, shared by the Java and
 // Python generators.
 
+import { makeWaypoint } from '../model/defaults';
 import type { Auto, Project } from '../model/types';
-import { type Plan, type TrajState, planAuto } from '../planner/trajectory';
+import { type Plan, type TrajState, buildTurnSamples, planAuto } from '../planner/trajectory';
 
 export interface GeneratedFile {
   /** Path relative to the robot project root, e.g. src/main/java/frc/robot/kop/KopAutos.java */
@@ -179,6 +180,75 @@ export function buildIR(auto: Auto, project: Project, plan?: Plan): IRAuto {
     }
   }
   return { name: auto.name, words: nameWords(auto.name), plan: p, steps, trajectories, commands: [...commands] };
+}
+
+/** Distance of the generated "Test: drive 2 m" auto, m. */
+export const TEST_DRIVE_METERS = 2;
+
+/** Trajectories of the calibration tests: a straight drive and one full turn to the left. */
+export function testTrajectories(project: Project): { drive: TrajState[]; turn: TrajState[] } {
+  const robot = project.robot;
+  const dt = project.codegen.sampleTime;
+  const straight: Auto = {
+    id: 'test-drive',
+    name: 'Test drive',
+    waypoints: [
+      makeWaypoint(0, 0, 0, { stop: true, lenIn: 0, lenOut: 0 }),
+      makeWaypoint(TEST_DRIVE_METERS, 0, 0, { stop: true, lenIn: 0, lenOut: 0 }),
+    ],
+  };
+  const plan = planAuto(straight, robot, { sampleTime: dt });
+  const drive = plan.steps.find((st) => st.kind === 'drive');
+  if (!drive || drive.kind !== 'drive') throw new Error('test drive did not plan');
+  const turn = buildTurnSamples({ x: 0, y: 0 }, 0, 2 * Math.PI, robot, dt).samples;
+  return { drive: drive.samples, turn };
+}
+
+/** README section shared by the Java and Python output: bringing the autos up on a real robot. */
+export function realRobotChecklist(language: 'java' | 'python', encoders: boolean): string {
+  const java = language === 'java';
+  const name = (javaName: string, pythonName: string) => `\`${java ? javaName : pythonName}\``;
+  const invertEncoders = `${name('kInvertLeftEncoder', 'INVERT_LEFT_ENCODER')} / ${name('kInvertRightEncoder', 'INVERT_RIGHT_ENCODER')}`;
+  const invertMotors = `${name('kInvertLeft', 'INVERT_LEFT')} / ${name('kInvertRight', 'INVERT_RIGHT')}`;
+  const steps = encoders
+    ? [
+        `**Directions.** With the robot disabled, roll it forward by hand (or turn the wheels forward on blocks). \`KOP/Left distance (m)\` and \`KOP/Right distance (m)\` on the dashboard must both go up; if one goes down, flip ${invertEncoders}. Then drive forward in teleop: if a side spins backwards, flip ${invertMotors} and check the encoders again.`,
+        '**Test: measure feedforward** (about 1.5 m of room ahead). Enter the kS and kV it reports on the planner\'s Robot tab. Good feedforward is what makes the robot hit its marks.',
+        '**Test: drive 2 m.** Measure how far the robot really went and correct the wheel diameter as the report says.',
+        '**Test: turn 360°.** Put a strip of tape along a bumper first. Correct the track width as the report says (6WD drop-center robots usually need 5-20% more than the measured width).',
+        'Generate the code again, deploy, and run your autos.',
+      ]
+    : [
+        `**Directions.** Drive forward in teleop: if a side spins backwards, flip ${invertMotors}.`,
+        '**Test: drive 2 m.** Measure how far the robot really went and correct kV as the report says. Without encoders, good kS/kV/kA are the only thing that makes the robot hit its marks.',
+        '**Test: turn 360°.** Put a strip of tape along a bumper first. Correct the track width as the report says.',
+        'Generate the code again, deploy, and run your autos.',
+      ];
+  const problems = encoders
+    ? [
+        '- **"KOP auto: the left side moved the opposite way to its motors"**: a direction is wrong (step 1). The follower stops trusting the encoders as soon as it sees this, so the robot does not run away; the rest of the auto runs open loop.',
+        '- **"... is not moving or its encoder is not counting"**: check the encoder cable, DIO ports or CAN ID. A thrown chain or a tripped breaker looks the same.',
+        '- **"a step could not reach its target in time"**: the robot was blocked or is too weak for the plan. Lower max velocity or acceleration, or measure kS/kV (step 2).',
+        '- **Turns stop short or go too far**: track width (step 4).',
+        '- **Right shape, but slower than planned**: the follower waits for a robot that falls behind instead of cutting corners. Measure kS/kV (step 2) or lower the speed limits.',
+        `- **Oscillates or buzzes when it stops**: lower ${name('kP', 'KP')} and ${name('kPTurn', 'KP_TURN')}; lower ${name('kD', 'KD')} if the motors buzz while driving.`,
+        '',
+        `After an encoder problem every later auto runs open loop until the robot code restarts (or call ${name('FollowKopTrajectory.clearEncoderFault()', 'follow.clear_encoder_fault()')}).`,
+      ]
+    : [
+        '- **Turns stop short or go too far**: track width (step 3).',
+        '- **Distances are off**: kS/kV (step 2). Encoders make a much bigger difference than any tuning; even one per side helps.',
+      ];
+  return `## First time on the real robot
+
+Each test is an auto in the chooser. Run it in autonomous with room around the robot, on carpet. Results appear in the Driver Station console and on the dashboard as \`KOP/Test result\`.
+
+${steps.map((st, i) => `${i + 1}. ${st}`).join('\n')}
+
+## If something goes wrong
+
+${problems.join('\n')}
+`;
 }
 
 export function headerComment(project: Project): string[] {

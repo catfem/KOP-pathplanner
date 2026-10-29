@@ -58,7 +58,7 @@ export function defaultRobot(): RobotConfig {
     kPTurn: 24.0,
     kLateral: 3.0,
     positionTolerance: 0.03,
-    maxSettleTime: 0.3,
+    maxSettleTime: 1.0,
     maxVoltage: 12.0,
 
     controller: 'can-talon-victor',

@@ -116,6 +116,18 @@ const MIN_TURN = 0.5 * DEG;
 const MIN_CHUNK_LENGTH = 1e-3;
 const MIN_PROFILE_SPEED = 0.05;
 
+/** Volts the planner leaves unused, for the follower's corrections and for battery sag. */
+export const VOLTAGE_HEADROOM = 2;
+
+/**
+ * Fastest wheel speed the planner uses: the configured max velocity, or less when the motors
+ * could not hold it with VOLTAGE_HEADROOM volts to spare (kS + kV * v <= max voltage - headroom).
+ */
+export function wheelSpeedLimit(robot: Pick<RobotConfig, 'maxVelocity' | 'maxVoltage' | 'kS' | 'kV'>): number {
+  const byVoltage = robot.kV > 1e-6 ? (robot.maxVoltage - VOLTAGE_HEADROOM - robot.kS) / robot.kV : Infinity;
+  return Math.max(0.1, Math.min(robot.maxVelocity, byVoltage));
+}
+
 /** The four control points of the Bezier segment from waypoint a to b. */
 export function segmentBezier(a: Waypoint, b: Waypoint): Bezier {
   const p0 = { x: a.x, y: a.y };
@@ -189,6 +201,7 @@ export function samplePath(
   const length = s;
   const count = Math.max(3, Math.ceil(length / ds) + 1);
   const step = length / (count - 1);
+  const top = wheelSpeedLimit(robot);
 
   const out: PathSamples = { s: [], x: [], y: [], theta: [], curvature: [], segLimit: [], waypointS, length };
   // Fill missing tangents (degenerate points) from neighbours.
@@ -220,7 +233,7 @@ export function samplePath(
     out.y.push(a.y + (b.y - a.y) * f);
     out.theta.push(thetas[j] + (thetas[Math.min(j + 1, dense.length - 1)] - thetas[j]) * f);
     const wp = waypoints[a.seg];
-    let limit = wp.maxVel !== null && wp.maxVel > 0 ? Math.min(wp.maxVel, robot.maxVelocity) : robot.maxVelocity;
+    let limit = wp.maxVel !== null && wp.maxVel > 0 ? Math.min(wp.maxVel, top) : top;
     if (bumps.length) {
       // The footprint is symmetric, so the path tangent works for reversed driving too.
       const corners = footprint(robot.length, robot.width, out.x[k], out.y[k], out.theta[k]);
@@ -254,7 +267,7 @@ function profilePath(path: PathSamples, robot: RobotConfig): Profile {
   for (let i = 0; i < n; i++) {
     const k = Math.abs(path.curvature[i]);
     let lim = Math.max(0.01, path.segLimit[i]);
-    lim = Math.min(lim, Math.max(0.01, robot.maxVelocity) / (1 + k * halfTrack));
+    lim = Math.min(lim, wheelSpeedLimit(robot) / (1 + k * halfTrack));
     if (k > 1e-6 && robot.maxCentripetal > 0) lim = Math.min(lim, Math.sqrt(robot.maxCentripetal / k));
     vLimit.push(Math.max(lim, MIN_PROFILE_SPEED));
   }
@@ -388,7 +401,7 @@ export function buildTurnSamples(
   const halfTrack = robot.trackWidth / 2;
   const dir = Math.sign(delta) || 1;
   const d = Math.abs(delta) * halfTrack;
-  const vMax = Math.max(0.01, Math.min(robot.maxTurnRate * DEG * halfTrack, robot.maxVelocity));
+  const vMax = Math.max(0.01, Math.min(robot.maxTurnRate * DEG * halfTrack, wheelSpeedLimit(robot)));
   const aMax = Math.max(0.01, robot.maxTurnAccel * DEG * halfTrack);
   let tAcc = vMax / aMax;
   let tCruise = 0;
@@ -625,6 +638,19 @@ export function planAuto(auto: Auto, robot: RobotConfig, options: PlanOptions = 
     });
   }
 
+  const top = wheelSpeedLimit(robot);
+  if (top < robot.maxVelocity - 1e-6 && steps.some((st) => st.kind === 'drive' || st.kind === 'turn')) {
+    warnings.push({
+      level: 'info',
+      message: `Wheel speed is limited to ${top.toFixed(2)} m/s (max velocity ${robot.maxVelocity.toFixed(2)} m/s) so the motors keep ${VOLTAGE_HEADROOM} V in reserve for corrections and battery sag. Measured kS/kV (generated “Test: measure feedforward” auto) or faster gearing raise it.`,
+    });
+  }
+  if (robot.encoder !== 'none' && robot.maxSettleTime < 0.5 && steps.some((st) => st.kind === 'turn')) {
+    warnings.push({
+      level: 'warn',
+      message: `Max settle time is ${robot.maxSettleTime.toFixed(2)} s: a turn held back by tread scrub may end before the wheels reach their target. 1 s is a safe value (Robot tab).`,
+    });
+  }
   const peakVoltage = computePeakVoltage(steps, robot);
   if (peakVoltage > robot.maxVoltage + 1e-6) {
     warnings.push({

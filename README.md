@@ -27,12 +27,17 @@ controller encoders, or no sensors at all.
   Includes turn-in-place profiles.
 - **Simulation**: play the auto back with a timeline, a step bar and wheel speed / voltage
   charts. A **physics simulation of the generated controller** runs on an imperfect robot (weaker
-  side, wrong kS, wheel scrub) so you can see how far the auto drifts without a gyro.
+  side, more friction, heavier or slower than planned, wheel scrub) so you can see how far the
+  auto drifts without a gyro, and how much longer it takes.
+- **Built for real KOP robots**: the generated follower waits for a robot that falls behind
+  instead of cutting corners, pushes through static friction and tread scrub at the end of each
+  step, holds heading against a weaker side, and stops trusting an encoder that reads backwards or
+  not at all (no runaway). Calibration autos measure kS/kV, wheel diameter and track width.
 - **Checks**: auto period overrun, bumpers leaving the field or hitting a HUB, turning on a BUMP,
   voltage saturation, sharp corners.
 - **Code generation** for **Java (WPILib command-based)** and **Python (RobotPy commands2)**:
-  a drivetrain subsystem, a gyro-less trajectory follower, a named-command registry and
-  one method per auto. Download everything as a `.zip`.
+  a drivetrain subsystem, a gyro-less trajectory follower, a named-command registry,
+  calibration autos and one method per auto. Download everything as a `.zip`.
 - **Hardware** supported out of the box: Talon SRX / Victor SPX (CAN, Phoenix 5), **SPARK MAX +
   NEO** and **SPARK Flex + NEO Vortex** (REVLib 2026, built-in encoders with a shortened velocity
   filter), SPARK MAX brushed (CIM), and PWM SPARK MAX / Victor SPX / Talon SRX / SPARK / Victor SP.
@@ -93,11 +98,28 @@ heading sensor involved.
 | Mode | What the generated follower does |
 | --- | --- |
 | **No encoders** | Plays back per-wheel feedforward voltages (kS + kV·v + kA·a) by time. Simple; drift grows with path length. |
-| **Encoders** | Feedforward plus per-wheel position/velocity feedback, a heading-hold term on the left/right error difference, and path correction from encoder-only odometry (steers back when the robot drifts sideways). |
+| **Encoders** | Feedforward plus per-wheel position/velocity feedback, heading hold on the left/right error difference (with an integral, so a weaker side does not leave a steady heading error), and path correction from encoder-only odometry (steers back when the robot drifts sideways). |
 
-The only error encoders cannot see is wheel slip and scrub. Calibrate the **effective track
-width** (spin in place N turns: `(|left| + |right|) / (2π·N)`) and measure kS/kV/kA with WPILib
-SysId. The **Estimate kV/kA** button gives a physics-based starting point.
+With encoders the follower is built for what a real KOP chassis does:
+
+- **Progress clock.** Setpoints advance on a clock that slows down and stops when a wheel falls
+  behind (heavier or slower than planned, low battery, tread scrub). Both wheels share the clock,
+  so the robot keeps the path's shape and takes longer instead of cutting corners. Markers trigger
+  on this progress, not on wall time, so they stay at their place on the path.
+- **Voltage limiting** scales both sides together, keeping the turn ratio.
+- **Settling.** A step ends when the distance is within tolerance, the heading within 0.75° and
+  both wheels are slow. A wheel stuck short of its target (static friction, scrub on a turn in
+  place) gets extra voltage until it moves.
+- **Encoder checks.** A side that moves the wrong way, or does not count while the other one
+  does, stops the closed loop before the robot runs away. The auto finishes open loop and the
+  Driver Station says which constant to flip.
+- **Planning headroom.** The planner keeps the feedforward 2 V under the voltage limit, so the
+  feedback has room to correct and a sagging battery does not saturate the motors.
+
+The only error encoders cannot see is wheel slip and scrub. The generated **calibration autos**
+(in the auto chooser) fix the rest on the real robot: *Test: measure feedforward* fits kS and kV,
+*Test: drive 2 m* checks the wheel diameter and *Test: turn 360°* the effective track width. The
+**Estimate kV/kA** button gives a physics-based starting point until then.
 
 ## Generated code
 
@@ -110,6 +132,7 @@ SysId. The **Estimate kV/kA** button gives a physics-based starting point.
 | `FollowKopTrajectory.java` | `follow.py` | Gyro-less trajectory follower command |
 | `KopNamedCommands.java` | `named_commands.py` | Registry for action/marker commands |
 | `KopAutos.java` | `autos.py`, `auto_data.py` | One command per auto, plus `buildChooser` |
+| `KopCalibration.java` | `calibration.py` | Calibration autos: measure feedforward, drive 2 m, turn 360° |
 
 Every auto can be **mirrored at runtime** (`KopAutos.myAuto(drive, () -> mirror)`), which swaps
 left and right turns to run the same routine from the other side of the field. Trajectories are
@@ -131,10 +154,13 @@ combination, then:
 
 - compiles every Java variant with `javac --release 17 -Werror` against API stubs of WPILib,
   Phoenix 5 and REVLib (`tools/verify/java-stubs`);
-- runs the generated `FollowKopTrajectory` against a drivetrain plant model;
+- runs the generated `FollowKopTrajectory` against drivetrain plants that do not match the
+  constants (weaker side, heavier and slower, tread scrub) and one with an encoder wired
+  backwards, which must be caught without a runaway;
 - constructs every Python variant with the real **RobotPy 2026** and vendor libraries, and
-  runs whole autos in the RobotPy simulator, checking the commands ran and where the robot
-  stopped.
+  runs whole autos, the calibration autos and an encoder fault in the RobotPy simulator,
+  checking the commands ran, where the robot stopped and that the feedforward test measures
+  the plant's kS and kV.
 
 It needs a JDK and `pip install -r tools/verify/requirements.txt`. CI runs it on every pull
 request, together with the unit and browser tests. Before the first `npm run test:e2e`, run

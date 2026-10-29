@@ -56,20 +56,27 @@ export function HelpModal() {
             but drift grows with path length and battery voltage.
           </li>
           <li>
-            <strong>With encoders:</strong> position + velocity feedback on each wheel, a heading-hold term on the left/right difference, and path
-            correction from encoder-only odometry. Errors stay small unless the wheels slip.
+            <strong>With encoders:</strong> position + velocity feedback on each wheel, heading hold on the left/right difference, and path
+            correction from encoder-only odometry. When the robot falls behind, the setpoints wait for it, so it keeps the path&apos;s shape
+            and takes longer instead of cutting corners. A wheel stuck short of its target gets extra voltage, and an encoder that reads
+            backwards or not at all is caught before the robot runs away. Errors stay small unless the wheels slip.
           </li>
         </ul>
 
         <h3>Calibration checklist</h3>
+        <p>The generated code adds calibration autos to the auto chooser. Run them on the real robot, in this order:</p>
         <ol>
-          <li>On blocks, drive forward: both encoder distances must go up. Flip the invert options if not.</li>
-          <li>Measure kS/kV/kA with WPILib SysId (or use &quot;Estimate kV/kA&quot; as a starting point).</li>
           <li>
-            Effective track width: spin in place N turns, read both distances, and use (|left| + |right|) / (2π·N). Scrub on 6-wheel drop-center
-            chassis makes this larger than the tape-measured width.
+            Directions: roll the robot forward by hand while it is disabled. The dashboard values KOP/Left distance and KOP/Right distance must
+            both go up. Flip the invert options if not.
           </li>
-          <li>Run an auto, compare where the robot stops with the plan, and adjust.</li>
+          <li>&quot;Test: measure feedforward&quot; reports kS and kV. Enter them on the Robot tab.</li>
+          <li>&quot;Test: drive 2 m&quot;: measure how far the robot went and correct the wheel diameter as reported.</li>
+          <li>
+            &quot;Test: turn 360°&quot;: tape a line along a bumper first and correct the track width as reported. Scrub on 6-wheel drop-center
+            chassis makes it larger than the tape-measured width.
+          </li>
+          <li>Generate the code again and run your autos.</li>
         </ol>
 
         <h3>Shortcuts</h3>

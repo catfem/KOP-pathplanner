@@ -1,6 +1,7 @@
 import { setUi, useStore } from '../../model/store';
 import { effectiveEncoder } from '../../model/hardware';
-import { DEFAULT_SIM, type SimResult, type SimSettings } from '../../planner/simulate';
+import { faultMessage } from '../../planner/follower';
+import { DEFAULT_SIM, PERFECT_SIM, type SimResult, type SimSettings } from '../../planner/simulate';
 import { Checkbox, Section } from '../components/controls';
 
 function Slider({ label, value, min, max, step, onChange, format }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format: (v: number) => string }) {
@@ -21,6 +22,7 @@ export function SimPanel({ sim }: { sim: SimResult | null }) {
   const showSim = useStore((s) => s.ui.showSim);
   const settings = useStore((s) => s.ui.sim);
   const robot = useStore((s) => s.project.robot);
+  const autoPeriod = useStore((s) => s.project.codegen.autoPeriod);
   const closed = effectiveEncoder(robot) !== 'none';
   const set = (patch: Partial<SimSettings>) => setUi({ sim: { ...settings, ...patch } });
 
@@ -44,15 +46,28 @@ export function SimPanel({ sim }: { sim: SimResult | null }) {
             </div>
             <div>
               <dt>Simulated time</dt>
-              <dd>{sim.totalTime.toFixed(2)} s</dd>
+              <dd className={sim.totalTime > autoPeriod ? 'bad' : undefined}>{sim.totalTime.toFixed(2)} s</dd>
             </div>
           </dl>
+        )}
+        {sim && showSim && sim.fault && (
+          <div className="warning error" role="alert">
+            Encoder check: {faultMessage(sim.fault)} The robot finishes open loop.
+          </div>
+        )}
+        {sim && showSim && sim.timeouts > 0 && (
+          <div className="warning warn">
+            {sim.timeouts === 1 ? 'One step' : `${sim.timeouts} steps`} gave up before reaching the target. The robot is too weak for the plan:
+            lower the speed limits or check kS/kV/kA.
+          </div>
         )}
       </Section>
       <Section title="Robot imperfections">
         <Slider label="Left side strength" value={settings.leftScale} min={0.8} max={1.2} step={0.01} format={pct} onChange={(v) => set({ leftScale: v })} />
         <Slider label="Right side strength" value={settings.rightScale} min={0.8} max={1.2} step={0.01} format={pct} onChange={(v) => set({ rightScale: v })} />
         <Slider label="Friction (kS) error" value={settings.kSScale} min={0.5} max={1.5} step={0.05} format={pct} onChange={(v) => set({ kSScale: v })} />
+        <Slider label="Slower than planned (kV)" value={settings.kVScale} min={0.9} max={1.4} step={0.01} format={pct} onChange={(v) => set({ kVScale: v })} />
+        <Slider label="Heavier than planned (kA)" value={settings.kAScale} min={0.8} max={2} step={0.05} format={pct} onChange={(v) => set({ kAScale: v })} />
         <Slider
           label="Wheel scrub (track width error)"
           value={settings.trackScale}
@@ -63,13 +78,15 @@ export function SimPanel({ sim }: { sim: SimResult | null }) {
           onChange={(v) => set({ trackScale: v })}
         />
         <p className="muted small">
-          Wheel scrub is the one error encoders cannot see: calibrate the effective track width on the Robot tab to remove it.
+          With encoders, the follower waits for a slow or heavy robot instead of cutting corners, so those errors mostly cost time. Wheel
+          scrub is the one error encoders cannot see: calibrate the effective track width with the generated &ldquo;Test: turn 360°&rdquo;
+          auto to remove it.
         </p>
         <div className="button-row">
           <button type="button" className="btn small" onClick={() => setUi({ sim: DEFAULT_SIM })}>
             Reset
           </button>
-          <button type="button" className="btn small" onClick={() => setUi({ sim: { leftScale: 1, rightScale: 1, kSScale: 1, trackScale: 1 } })}>
+          <button type="button" className="btn small" onClick={() => setUi({ sim: PERFECT_SIM })}>
             Perfect robot
           </button>
         </div>

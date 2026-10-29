@@ -2,9 +2,11 @@
 # Verifies the generated robot code end to end:
 #   1. dumps generated Java + Python for every motor controller / encoder variant,
 #   2. compiles each Java variant against API stubs (tools/verify/java-stubs),
-#   3. runs FollowKopTrajectory (Java) against a drivetrain plant model,
+#   3. runs FollowKopTrajectory (Java) against drivetrain plants that do not match the constants
+#      (weaker side, heavier and slower, tread scrub, an encoder wired backwards),
 #   4. constructs every Python variant with the real RobotPy + vendor libraries and runs the
-#      PWM variants through a whole auto in the RobotPy simulator.
+#      PWM variants through a whole auto, the calibration tests and an encoder fault in the
+#      RobotPy simulator.
 # Needs: node, a JDK (17+), and python with robotpy, robotpy-commands-v2, robotpy-rev, robotpy-ctre.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -31,7 +33,8 @@ for dir in "$OUT"/gen/java/*/; do
   fi
   case "$variant" in
     can-talon-victor_rio | pwm-spark_none)
-      for traj in "TwoPieceData DRIVE_1" "TwoPieceData DRIVE_2" "DriveAndTurnData TURN_1"; do
+      for traj in 'KopAutos$TwoPieceData DRIVE_1' 'KopAutos$TwoPieceData DRIVE_2' 'KopAutos$DriveAndTurnData TURN_1' \
+        'KopCalibration DRIVE' 'KopCalibration TURN'; do
         # shellcheck disable=SC2086
         java -cp "$OUT/stubs:$classes" frc.robot.kop.FollowerHarness $traj || fail=1
       done
@@ -43,7 +46,8 @@ echo "== Running Python in the RobotPy simulator"
 for dir in "$OUT"/gen/python/*/; do
   variant="$(basename "$dir")"
   case "$variant" in
-    pwm-*) modes="run" ;;
+    pwm-*_rio) modes="run calibrate fault" ;;
+    pwm-*) modes="run calibrate" ;;
     *) modes="construct" ;;
   esac
   for mode in $modes; do
