@@ -45,19 +45,30 @@ export const FOLLOWER = {
    * Heading hold also integrates the heading error while driving, so a weaker side (gearbox
    * friction, a tired motor) does not leave a steady heading error. Integral time, s, and limit, V.
    */
-  turnIntegralTime: 0.5,
+  turnIntegralTime: 1.0,
   turnIntegralMax: 3,
   maxSteer: 0.35,
   steerFullSpeed: 0.3,
   /**
-   * Encoder checks against the plan: a side whose setpoint moved `checkPlanned` m but whose
-   * encoder moved less than `checkSilent` m while the other side tracks has a dead encoder; a
-   * side that moved `checkBackwards` m against the direction of its setpoint reads backwards.
+   * Above this speed (m/s) the path correction steers less, in proportion, so it closes a sideways
+   * error at the same rate at any speed. Steering harder at speed makes the robot weave once the
+   * encoder readings lag (CAN encoders arrive a loop late).
+   */
+  steerRefSpeed: 1.0,
+  /**
+   * Encoder checks. Only volts above kS + `faultFriction` count as a strong push, so a wheel held
+   * by static friction or tread scrub is never mistaken for a broken encoder.
+   * - Backwards: the encoder moved `checkBackwards` m against a strong push.
+   * - Not counting: the encoder stayed within `checkSilent` m while its side got enough push to
+   *   travel `deadEffort` m and the other side moved `checkPlanned` m.
+   * - Neither counting: both setpoints moved `checkPlanned` m and both encoders stayed within
+   *   `checkSilent` m for `silentTime` s.
    */
   checkPlanned: 0.1,
   checkSilent: 0.01,
   checkBackwards: 0.05,
-  /** Both sides silent this long (s) while their setpoints moved: neither encoder counts. */
+  faultFriction: 2.5,
+  deadEffort: 0.1,
   silentTime: 0.5,
 };
 
@@ -115,6 +126,21 @@ export class KopFollower {
   private leftStart = 0;
   private rightStart = 0;
   private silentTime = 0;
+  // Volts applied in the last loop (trajectory frame) and the travel they should have produced.
+  private lastLeftVolts = 0;
+  private lastRightVolts = 0;
+  private leftEffort = 0;
+  private rightEffort = 0;
+  // Distance each wheel has moved against a strong push from its motors (a backwards encoder).
+  private leftAgainst = 0;
+  private rightAgainst = 0;
+  private checkedLeft = 0;
+  private checkedRight = 0;
+  // Where each encoder last moved (by checkSilent), and the other side's reading at that moment.
+  private leftAnchor = 0;
+  private rightAnchor = 0;
+  private rightAtLeftAnchor = 0;
+  private leftAtRightAnchor = 0;
   private odomX: number;
   private odomY: number;
   private odomHeading: number;
@@ -263,37 +289,67 @@ export class KopFollower {
       leftVolts *= this.g.maxVoltage / peak;
       rightVolts *= this.g.maxVoltage / peak;
     }
+    this.lastLeftVolts = leftVolts;
+    this.lastRightVolts = rightVolts;
     return this.mirrored ? { left: rightVolts, right: leftVolts } : { left: leftVolts, right: rightVolts };
   }
 
   private finish(): { left: number; right: number } {
     this.finished = true;
+    this.lastLeftVolts = 0;
+    this.lastRightVolts = 0;
     return { left: 0, right: 0 };
   }
 
   /**
-   * Compares how far each side has moved with its setpoint. Returns true and records the fault
-   * when an encoder cannot be trusted.
+   * Compares how far each side has moved with its setpoint (and, for a silent side, how hard it
+   * was driven). Returns true and records the fault when an encoder cannot be trusted.
    */
   private checkEncoders(left: number, right: number, sp: TrajState, dt: number): boolean {
-    // The progress clock waits for a lagging robot, so judge direction by where the setpoint is heading.
-    const direction = (position: number, velocity: number) => (Math.abs(velocity) > 1e-3 ? sign(velocity) : sign(position));
-    const wrongWay = (position: number, velocity: number, measured: number) =>
-      direction(position, velocity) * measured < -FOLLOWER.checkBackwards;
+    const g = this.g;
+    const push = (volts: number) => (Math.max(0, Math.abs(volts) - g.kS - FOLLOWER.faultFriction) * dt) / Math.max(0.1, g.kV);
+    // A wheel reads backwards when its encoder keeps moving against a strong push from its motors:
+    // with the sign wrong, every correction drives it further the wrong way. A wheel held by
+    // friction does not move, and a braking wheel only coasts a little against the push.
+    const against = (total: number, moved: number, volts: number) => {
+      if (push(volts) > 0 && moved * volts < 0) return total + Math.abs(moved);
+      return moved * volts > 0 ? 0 : total;
+    };
+    this.leftAgainst = against(this.leftAgainst, left - this.checkedLeft, this.lastLeftVolts);
+    this.rightAgainst = against(this.rightAgainst, right - this.checkedRight, this.lastRightVolts);
+    this.checkedLeft = left;
+    this.checkedRight = right;
+    // A dead encoder stays put while its side is driven hard and the other side keeps moving. The
+    // effort restarts whenever the encoder moves, so a wheel that pauses (held by friction, or
+    // turning around on a tight curve) does not add up.
+    if (Math.abs(left - this.leftAnchor) >= FOLLOWER.checkSilent) {
+      this.leftAnchor = left;
+      this.leftEffort = 0;
+      this.rightAtLeftAnchor = right;
+    }
+    if (Math.abs(right - this.rightAnchor) >= FOLLOWER.checkSilent) {
+      this.rightAnchor = right;
+      this.rightEffort = 0;
+      this.leftAtRightAnchor = left;
+    }
+    this.leftEffort += push(this.lastLeftVolts);
+    this.rightEffort += push(this.lastRightVolts);
+    const leftDead = this.leftEffort > FOLLOWER.deadEffort && Math.abs(right - this.rightAtLeftAnchor) > FOLLOWER.checkPlanned;
+    const rightDead = this.rightEffort > FOLLOWER.deadEffort && Math.abs(left - this.leftAtRightAnchor) > FOLLOWER.checkPlanned;
     const silent = (planned: number, measured: number) =>
       Math.abs(planned) > FOLLOWER.checkPlanned && Math.abs(measured) < FOLLOWER.checkSilent;
-    const tracking = (planned: number, measured: number) =>
-      Math.abs(planned) > FOLLOWER.checkPlanned && planned * measured > 0 && Math.abs(measured) > Math.abs(planned) / 2;
-    const leftKind: EncoderFault['kind'] | null = wrongWay(sp.lPos, sp.lVel, left)
-      ? 'backwards'
-      : silent(sp.lPos, left) && tracking(sp.rPos, right)
-        ? 'not-counting'
-        : null;
-    const rightKind: EncoderFault['kind'] | null = wrongWay(sp.rPos, sp.rVel, right)
-      ? 'backwards'
-      : silent(sp.rPos, right) && tracking(sp.lPos, left)
-        ? 'not-counting'
-        : null;
+    const leftKind: EncoderFault['kind'] | null =
+      this.leftAgainst > FOLLOWER.checkBackwards
+        ? 'backwards'
+        : leftDead
+          ? 'not-counting'
+          : null;
+    const rightKind: EncoderFault['kind'] | null =
+      this.rightAgainst > FOLLOWER.checkBackwards
+        ? 'backwards'
+        : rightDead
+          ? 'not-counting'
+          : null;
     if (leftKind || rightKind) {
       // Report the physical side: a mirrored path swapped them.
       const trajectoryLeft = leftKind !== null;
@@ -335,7 +391,8 @@ export class KopFollower {
     const dy = sp.y - this.odomY;
     const lateral = -Math.sin(this.odomHeading) * dx + Math.cos(this.odomHeading) * dy;
     const speedScale = Math.min(1, Math.abs(velocity) / FOLLOWER.steerFullSpeed);
-    const steer = Math.max(-FOLLOWER.maxSteer, Math.min(FOLLOWER.maxSteer, Math.atan(g.kLateral * lateral)));
+    const gain = g.kLateral * Math.min(1, FOLLOWER.steerRefSpeed / Math.abs(velocity));
+    const steer = Math.max(-FOLLOWER.maxSteer, Math.min(FOLLOWER.maxSteer, Math.atan(gain * lateral)));
     return sign(velocity) * speedScale * steer * (g.trackWidth / 2);
   }
 }

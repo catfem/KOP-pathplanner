@@ -20,7 +20,8 @@ public class FollowerHarness {
       double kAScale,
       double scrubVolts,
       double leftEncoder,
-      double rightEncoder) {}
+      double rightEncoder,
+      boolean canDelay) {}
 
   static class FakeDrive extends edu.wpi.first.wpilibj2.command.SubsystemBase implements KopDrive {
     final Robot robot;
@@ -30,6 +31,8 @@ public class FollowerHarness {
     double rightVel;
     double leftVolts;
     double rightVolts;
+    // Readings as the follower sees them: one loop late with CAN encoders.
+    double[] reading = new double[4];
 
     FakeDrive(Robot robot) {
       this.robot = robot;
@@ -41,19 +44,19 @@ public class FollowerHarness {
     }
 
     public double getLeftDistanceMeters() {
-      return leftPos * robot.leftEncoder();
+      return robot.canDelay() ? reading[0] : leftPos * robot.leftEncoder();
     }
 
     public double getRightDistanceMeters() {
-      return rightPos * robot.rightEncoder();
+      return robot.canDelay() ? reading[1] : rightPos * robot.rightEncoder();
     }
 
     public double getLeftVelocityMetersPerSecond() {
-      return leftVel * robot.leftEncoder();
+      return robot.canDelay() ? reading[2] : leftVel * robot.leftEncoder();
     }
 
     public double getRightVelocityMetersPerSecond() {
-      return rightVel * robot.rightEncoder();
+      return robot.canDelay() ? reading[3] : rightVel * robot.rightEncoder();
     }
 
     public boolean hasEncoders() {
@@ -77,6 +80,13 @@ public class FollowerHarness {
     }
 
     void step(double dt) {
+      reading =
+          new double[] {
+            leftPos * robot.leftEncoder(),
+            rightPos * robot.rightEncoder(),
+            leftVel * robot.leftEncoder(),
+            rightVel * robot.rightEncoder()
+          };
       for (int i = 0; i < 10; i++) {
         double l = Math.max(-12, Math.min(12, leftVolts)) * robot.leftScale();
         double r = Math.max(-12, Math.min(12, rightVolts));
@@ -103,10 +113,12 @@ public class FollowerHarness {
     KopTrajectory.State end = trajectory.sample(1e9, new KopTrajectory.State());
     double turnTolerance = kTrackWidthMeters / 2.0 * Math.toRadians(0.75);
     Robot[] robots = {
-      new Robot("matches the model", 1.0, 1.0, 1.0, 1.0, 0.0, 1, 1),
-      new Robot("left side -5%", 0.95, 1.0, 1.0, 1.0, 0.0, 1, 1),
-      new Robot("heavy, slow, scrubbing", 0.92, 1.4, 1.15, 1.5, 2.0, 1, 1),
-      new Robot("left encoder backwards", 1.0, 1.0, 1.0, 1.0, 0.0, -1, 1),
+      new Robot("matches the model", 1.0, 1.0, 1.0, 1.0, 0.0, 1, 1, false),
+      new Robot("left side -5%", 0.95, 1.0, 1.0, 1.0, 0.0, 1, 1, false),
+      new Robot("heavy, slow, scrubbing", 0.92, 1.4, 1.15, 1.5, 2.0, 1, 1, false),
+      new Robot("CAN encoders a loop late, left -10%", 0.9, 1.0, 1.0, 1.0, 0.0, 1, 1, true),
+      new Robot("CAN delay, heavy, slow, scrubbing", 0.92, 1.4, 1.15, 1.5, 2.0, 1, 1, true),
+      new Robot("left encoder backwards", 1.0, 1.0, 1.0, 1.0, 0.0, -1, 1, false),
     };
     boolean ok = true;
     for (Robot robot : robots) {

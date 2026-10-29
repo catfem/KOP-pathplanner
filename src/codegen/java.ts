@@ -320,10 +320,21 @@ public class FollowKopTrajectory extends Command {
   // Path correction.
   private static final double kMaxSteerRadians = ${float(F.maxSteer)};
   private static final double kSteerFullSpeed = ${float(F.steerFullSpeed)};
-  // Encoder checks against the setpoints.
+  // Above this speed the correction steers less, in proportion, so it closes a sideways error at the
+  // same rate at any speed (steering harder at speed weaves once CAN encoder readings lag).
+  private static final double kSteerRefSpeed = ${float(F.steerRefSpeed)};
+  // Encoder checks. Only volts above kS + kFaultFrictionVolts count as a strong push, so a wheel
+  // held by static friction or tread scrub is never mistaken for a broken encoder.
+  // - Backwards: the encoder moved kCheckBackwardsMeters against a strong push.
+  // - Not counting: the encoder stayed within kCheckSilentMeters while its side got enough push to
+  //   travel kDeadEffortMeters and the other side moved kCheckPlannedMeters.
+  // - Neither counting: both setpoints moved kCheckPlannedMeters and both encoders stayed within
+  //   kCheckSilentMeters for kSilentSeconds.
   private static final double kCheckPlannedMeters = ${float(F.checkPlanned)};
   private static final double kCheckSilentMeters = ${float(F.checkSilent)};
   private static final double kCheckBackwardsMeters = ${float(F.checkBackwards)};
+  private static final double kFaultFrictionVolts = ${float(F.faultFriction)};
+  private static final double kDeadEffortMeters = ${float(F.deadEffort)};
   private static final double kSilentSeconds = ${float(F.silentTime)};
 
   /** Set when an encoder could not be trusted; every later trajectory then runs open loop. */
@@ -344,6 +355,21 @@ public class FollowKopTrajectory extends Command {
   private double lastTime;
   private double settleTime;
   private double silentTime;
+  // Volts applied in the last loop (trajectory frame) and the travel they should have produced.
+  private double lastLeftVolts;
+  private double lastRightVolts;
+  private double leftEffort;
+  private double rightEffort;
+  // Distance each wheel has moved against a strong push from its motors (a backwards encoder).
+  private double leftAgainst;
+  private double rightAgainst;
+  private double checkedLeft;
+  private double checkedRight;
+  // Where each encoder last moved, and the other side's reading at that moment.
+  private double leftAnchor;
+  private double rightAnchor;
+  private double rightAtLeftAnchor;
+  private double leftAtRightAnchor;
   private double leftBoost;
   private double rightBoost;
   private double turnIntegral;
@@ -398,6 +424,18 @@ public class FollowKopTrajectory extends Command {
     lastTime = 0.0;
     settleTime = 0.0;
     silentTime = 0.0;
+    lastLeftVolts = 0.0;
+    lastRightVolts = 0.0;
+    leftEffort = 0.0;
+    rightEffort = 0.0;
+    leftAgainst = 0.0;
+    rightAgainst = 0.0;
+    checkedLeft = 0.0;
+    checkedRight = 0.0;
+    leftAnchor = 0.0;
+    rightAnchor = 0.0;
+    rightAtLeftAnchor = 0.0;
+    leftAtRightAnchor = 0.0;
     leftBoost = 0.0;
     rightBoost = 0.0;
     turnIntegral = 0.0;
@@ -551,6 +589,8 @@ public class FollowKopTrajectory extends Command {
 
   private void finish() {
     finished = true;
+    lastLeftVolts = 0.0;
+    lastRightVolts = 0.0;
     drive.stopDrive();
   }
 
@@ -561,6 +601,8 @@ public class FollowKopTrajectory extends Command {
       leftVolts *= kMaxVoltage / peak;
       rightVolts *= kMaxVoltage / peak;
     }
+    lastLeftVolts = leftVolts;
+    lastRightVolts = rightVolts;
     if (mirrored) {
       drive.setWheelVoltages(rightVolts, leftVolts);
       drive.setTargetPose(setpoint.x, kFieldWidthMeters - setpoint.y, -setpoint.heading);
@@ -600,22 +642,40 @@ public class FollowKopTrajectory extends Command {
   }
 
   /**
-   * Compares how far each side has moved with its setpoint. Returns true, and stops using the
-   * encoders, when one cannot be trusted.
+   * Compares how each side's encoder moved with how hard its motors pushed (and, when neither moves,
+   * with the setpoints). Returns true, and stops using the encoders, when one cannot be trusted.
    */
   private boolean checkEncoders(double left, double right, double dt) {
+    // A wheel reads backwards when its encoder keeps moving against a strong push from its motors:
+    // with the sign wrong, every correction drives it further the wrong way. A wheel held by
+    // friction does not move, and a braking wheel only coasts a little against the push.
+    leftAgainst = against(leftAgainst, left - checkedLeft, lastLeftVolts, dt);
+    rightAgainst = against(rightAgainst, right - checkedRight, lastRightVolts, dt);
+    checkedLeft = left;
+    checkedRight = right;
+    // A dead encoder stays put while its side is driven hard and the other side keeps moving. The
+    // effort restarts whenever the encoder moves, so a wheel that pauses (held by friction, or
+    // turning around on a tight curve) does not add up.
+    if (Math.abs(left - leftAnchor) >= kCheckSilentMeters) {
+      leftAnchor = left;
+      leftEffort = 0.0;
+      rightAtLeftAnchor = right;
+    }
+    if (Math.abs(right - rightAnchor) >= kCheckSilentMeters) {
+      rightAnchor = right;
+      rightEffort = 0.0;
+      leftAtRightAnchor = left;
+    }
+    leftEffort += push(lastLeftVolts, dt);
+    rightEffort += push(lastRightVolts, dt);
+    boolean leftDead =
+        leftEffort > kDeadEffortMeters && Math.abs(right - rightAtLeftAnchor) > kCheckPlannedMeters;
+    boolean rightDead =
+        rightEffort > kDeadEffortMeters && Math.abs(left - leftAtRightAnchor) > kCheckPlannedMeters;
     String leftKind =
-        wrongWay(setpoint.leftPosition, setpoint.leftVelocity, left)
-            ? "backwards"
-            : silent(setpoint.leftPosition, left) && tracking(setpoint.rightPosition, right)
-                ? "not counting"
-                : null;
+        leftAgainst > kCheckBackwardsMeters ? "backwards" : leftDead ? "not counting" : null;
     String rightKind =
-        wrongWay(setpoint.rightPosition, setpoint.rightVelocity, right)
-            ? "backwards"
-            : silent(setpoint.rightPosition, right) && tracking(setpoint.leftPosition, left)
-                ? "not counting"
-                : null;
+        rightAgainst > kCheckBackwardsMeters ? "backwards" : rightDead ? "not counting" : null;
     String message = null;
     if (leftKind != null || rightKind != null) {
       // Report the physical side: a mirrored path swapped them.
@@ -640,6 +700,11 @@ public class FollowKopTrajectory extends Command {
     return true;
   }
 
+  /** Travel (m) the volts above friction should produce in dt. */
+  private static double push(double volts, double dt) {
+    return Math.max(0.0, Math.abs(volts) - kS - kFaultFrictionVolts) * dt / Math.max(0.1, kV);
+  }
+
   private static String faultMessage(boolean left, String kind) {
     String side = left ? "left" : "right";
     String constant = left ? "kInvertLeft" : "kInvertRight";
@@ -660,20 +725,16 @@ public class FollowKopTrajectory extends Command {
         + " CAN ID (a thrown chain or tripped breaker looks the same).";
   }
 
-  // The progress clock waits for a lagging robot, so judge direction by where the setpoint heads.
-  private static boolean wrongWay(double position, double velocity, double measured) {
-    double direction = Math.abs(velocity) > 1e-3 ? Math.signum(velocity) : Math.signum(position);
-    return direction * measured < -kCheckBackwardsMeters;
+  /** Adds a wheel's movement against a strong push to {@code total}; moving with the push clears it. */
+  private static double against(double total, double moved, double volts, double dt) {
+    if (push(volts, dt) > 0.0 && moved * volts < 0.0) {
+      return total + Math.abs(moved);
+    }
+    return moved * volts > 0.0 ? 0.0 : total;
   }
 
   private static boolean silent(double planned, double measured) {
     return Math.abs(planned) > kCheckPlannedMeters && Math.abs(measured) < kCheckSilentMeters;
-  }
-
-  private static boolean tracking(double planned, double measured) {
-    return Math.abs(planned) > kCheckPlannedMeters
-        && planned * measured > 0.0
-        && Math.abs(measured) > Math.abs(planned) / 2.0;
   }
 
   private void updateOdometry(double left, double right) {
@@ -698,8 +759,9 @@ public class FollowKopTrajectory extends Command {
     double dy = setpoint.y - odomY;
     double lateralError = -Math.sin(odomHeading) * dx + Math.cos(odomHeading) * dy;
     double speedScale = Math.min(1.0, Math.abs(velocity) / kSteerFullSpeed);
+    double gain = kLateral * Math.min(1.0, kSteerRefSpeed / Math.abs(velocity));
     double steer =
-        Math.max(-kMaxSteerRadians, Math.min(kMaxSteerRadians, Math.atan(kLateral * lateralError)));
+        Math.max(-kMaxSteerRadians, Math.min(kMaxSteerRadians, Math.atan(gain * lateralError)));
     return Math.signum(velocity) * speedScale * steer * kTrackWidthMeters / 2.0;
   }
 
