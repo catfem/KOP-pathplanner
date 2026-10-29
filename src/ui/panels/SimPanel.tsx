@@ -3,6 +3,7 @@ import { effectiveEncoder } from '../../model/hardware';
 import { faultMessage } from '../../planner/follower';
 import { DEFAULT_SIM, PERFECT_SIM, type SimResult, type SimSettings } from '../../planner/simulate';
 import { Checkbox, Section } from '../components/controls';
+import type { SimComparison } from '../hooks/usePlanning';
 
 function Slider({ label, value, min, max, step, onChange, format }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format: (v: number) => string }) {
   return (
@@ -18,7 +19,21 @@ function Slider({ label, value, min, max, step, onChange, format }: { label: str
 
 const pct = (v: number) => `${v >= 1 ? '+' : ''}${((v - 1) * 100).toFixed(0)}%`;
 
-export function SimPanel({ sim }: { sim: SimResult | null }) {
+const positionClass = (m: number) => (m > 0.3 ? 'bad' : m > 0.1 ? 'meh' : 'good');
+const headingClass = (deg: number) => (Math.abs(deg) > 10 ? 'bad' : Math.abs(deg) > 3 ? 'meh' : 'good');
+
+/** "stray up to 48 cm from the path and end 3 cm and 0.4° off", with the same colors as the stats. */
+function Outcome({ result }: { result: SimResult }) {
+  return (
+    <>
+      stray up to <strong className={positionClass(result.maxPathDeviation)}>{(result.maxPathDeviation * 100).toFixed(0)} cm</strong> from the
+      path and end <strong className={positionClass(result.positionError)}>{(result.positionError * 100).toFixed(0)} cm</strong> and{' '}
+      <strong className={headingClass(result.headingErrorDeg)}>{Math.abs(result.headingErrorDeg).toFixed(1)}°</strong> off
+    </>
+  );
+}
+
+export function SimPanel({ sim, comparison }: { sim: SimResult | null; comparison: SimComparison | null }) {
   const showSim = useStore((s) => s.ui.showSim);
   const settings = useStore((s) => s.ui.sim);
   const robot = useStore((s) => s.project.robot);
@@ -30,19 +45,23 @@ export function SimPanel({ sim }: { sim: SimResult | null }) {
     <div className="panel-scroll">
       <Section title="Real-world simulation">
         <p className="muted small">
-          Runs the generated controller ({closed ? 'encoder feedback' : 'open loop, no sensors'}) on a robot that does not exactly match your
-          settings, then draws where it really ends up (dashed orange). Use it to see how far an auto drifts without a gyro.
+          Runs the generated code ({closed ? 'encoder feedback' : 'open loop, no sensors'}) on a robot that does not match your settings (the
+          imperfections below) and draws where it really goes (dashed orange). Playback continues until the simulated robot has finished.
         </p>
         <Checkbox label="Show simulated robot" checked={showSim} onChange={(v) => setUi({ showSim: v })} />
         {sim && showSim && (
           <dl className="stats">
             <div>
               <dt>End position error</dt>
-              <dd className={sim.positionError > 0.3 ? 'bad' : sim.positionError > 0.1 ? 'meh' : 'good'}>{(sim.positionError * 100).toFixed(1)} cm</dd>
+              <dd className={positionClass(sim.positionError)}>{(sim.positionError * 100).toFixed(1)} cm</dd>
             </div>
             <div>
               <dt>End heading error</dt>
-              <dd className={Math.abs(sim.headingErrorDeg) > 10 ? 'bad' : Math.abs(sim.headingErrorDeg) > 3 ? 'meh' : 'good'}>{sim.headingErrorDeg.toFixed(1)}°</dd>
+              <dd className={headingClass(sim.headingErrorDeg)}>{sim.headingErrorDeg.toFixed(1)}°</dd>
+            </div>
+            <div>
+              <dt>Farthest from the path</dt>
+              <dd className={positionClass(sim.maxPathDeviation)}>{(sim.maxPathDeviation * 100).toFixed(1)} cm</dd>
             </div>
             <div>
               <dt>Simulated time</dt>
@@ -50,15 +69,37 @@ export function SimPanel({ sim }: { sim: SimResult | null }) {
             </div>
           </dl>
         )}
+        {sim && showSim && comparison && !comparison.withEncoders && (
+          <p className="sim-compare">
+            The encoder feedback in the generated code corrects these imperfections. Without it, this robot would{' '}
+            <Outcome result={comparison.result} />.
+          </p>
+        )}
+        {sim && showSim && comparison?.withEncoders && (
+          <div className="warning warn">
+            <span>
+              No encoders: the generated code plays the plan back and cannot notice or correct these imperfections. With encoders, this robot
+              would <Outcome result={comparison.result} />.
+            </span>
+          </div>
+        )}
+        {sim && showSim && closed && Math.abs(settings.trackScale - 1) > 0.02 && sim.positionError > 0.1 && (
+          <p className="muted small">
+            Most of the remaining error is wheel scrub, which encoders cannot see. Calibrate the track width on the real robot with the
+            generated &ldquo;Test: turn 360°&rdquo; auto.
+          </p>
+        )}
         {sim && showSim && sim.fault && (
           <div className="warning error" role="alert">
-            Encoder check: {faultMessage(sim.fault)} The robot finishes open loop.
+            <span>Encoder check: {faultMessage(sim.fault)} The robot finishes open loop.</span>
           </div>
         )}
         {sim && showSim && sim.timeouts > 0 && (
           <div className="warning warn">
-            {sim.timeouts === 1 ? 'One step' : `${sim.timeouts} steps`} gave up before reaching the target. The robot is too weak for the plan:
-            lower the speed limits or check kS/kV/kA.
+            <span>
+              {sim.timeouts === 1 ? 'One step' : `${sim.timeouts} steps`} gave up before reaching the target. The robot is too weak for the
+              plan: lower the speed limits or check kS/kV/kA.
+            </span>
           </div>
         )}
       </Section>

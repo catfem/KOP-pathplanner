@@ -1,5 +1,5 @@
 import { presetElements } from './field';
-import type { Auto, MotorType, Project, RobotConfig, Waypoint } from './types';
+import type { Auto, CodegenConfig, MotorType, Project, RobotConfig, Waypoint } from './types';
 
 let idCounter = 0;
 export function newId(prefix = 'id'): string {
@@ -167,6 +167,10 @@ export function exampleAutos(): Auto[] {
   return [twoPiece, square];
 }
 
+export function defaultCodegen(): CodegenConfig {
+  return { language: 'java', javaPackage: 'frc.robot.kop', sampleTime: 0.02, autoPeriod: 15 };
+}
+
 export function defaultProject(): Project {
   const preset = FIELD_PRESETS[0];
   return {
@@ -185,6 +189,6 @@ export function defaultProject(): Project {
       { name: 'Intake', duration: 0.5 },
       { name: 'Score', duration: 0.8 },
     ],
-    codegen: { language: 'java', javaPackage: 'frc.robot.kop', sampleTime: 0.02, autoPeriod: 15 },
+    codegen: defaultCodegen(),
   };
 }

@@ -1,6 +1,7 @@
 import { type InspectorTab, setUi, useStore } from '../../model/store';
 import type { Auto } from '../../model/types';
 import type { SimResult } from '../../planner/simulate';
+import type { SimComparison } from '../hooks/usePlanning';
 import type { Plan } from '../../planner/trajectory';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Tabs } from '../components/Tabs';
@@ -18,7 +19,17 @@ const TABS: { id: InspectorTab; label: string }[] = [
   { id: 'sim', label: 'Simulate' },
 ];
 
-export function Inspector({ auto, plan, sim }: { auto: Auto | undefined; plan: Plan | null; sim: SimResult | null }) {
+export function Inspector({
+  auto,
+  plan,
+  sim,
+  comparison,
+}: {
+  auto: Auto | undefined;
+  plan: Plan | null;
+  sim: SimResult | null;
+  comparison: SimComparison | null;
+}) {
   const tab = useStore((s) => s.ui.tab);
   const hasWarnings = !!plan?.warnings.some((w) => w.level !== 'info');
   return (
@@ -36,7 +47,7 @@ export function Inspector({ auto, plan, sim }: { auto: Auto | undefined; plan: P
           {tab === 'auto' && auto && <AutoPanel auto={auto} plan={plan} />}
           {tab === 'robot' && <RobotPanel />}
           {tab === 'field' && <FieldPanel />}
-          {tab === 'sim' && <SimPanel sim={sim} />}
+          {tab === 'sim' && <SimPanel sim={sim} comparison={comparison} />}
         </ErrorBoundary>
       </div>
     </aside>

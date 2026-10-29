@@ -6,6 +6,7 @@ import { IconButton } from '../components/controls';
 import { IconCode, IconHelp, IconMonitor, IconMoon, IconPanelLeft, IconPanelRight, IconRedo, IconSun, IconUndo } from '../components/icons';
 import { Menu } from '../components/Menu';
 import { downloadBlob, pickFile } from '../lib/files';
+import { currentConfig, downloadRobotConfig, importRobotConfigFile } from '../panels/RobotConfigs';
 
 /** Runs a menu action and reports failures (bad files, parse errors) as a toast. */
 function guarded(fn: () => void | Promise<void>) {
@@ -41,7 +42,17 @@ const projectMenu = [
     onSelect: guarded(() => downloadBlob('kop-autos.kop.json', JSON.stringify(getState().project, null, 2), 'application/json')),
   },
   {
+    label: 'Save robot config file',
+    separatorBefore: true,
+    onSelect: guarded(() => downloadRobotConfig(currentConfig()?.name ?? 'Robot')),
+  },
+  {
+    label: 'Load robot config file…',
+    onSelect: importRobotConfigFile,
+  },
+  {
     label: 'Import PathPlanner path…',
+    separatorBefore: true,
     onSelect: guarded(async () => {
       const file = await pickFile('.path,.json');
       if (!file) return;

@@ -68,6 +68,8 @@ export interface SimResult {
   totalTime: number;
   positionError: number;
   headingErrorDeg: number;
+  /** Farthest the robot center strays from the planned path at any time, m. */
+  maxPathDeviation: number;
   closedLoop: boolean;
   /** Encoder fault the follower detected (it then finished open loop). */
   fault: EncoderFault | null;
@@ -199,7 +201,34 @@ export function simulatePlan(
   const positionError = Math.hypot(x - plan.endPose.x, y - plan.endPose.y);
   let dh = ((heading - plan.endPose.heading) * 180) / Math.PI;
   dh = ((dh + 180) % 360 + 360) % 360 - 180;
-  return { trace, totalTime: t, positionError, headingErrorDeg: dh, closedLoop, fault, timeouts };
+  return { trace, totalTime: t, positionError, headingErrorDeg: dh, maxPathDeviation: pathDeviation(plan, trace), closedLoop, fault, timeouts };
+}
+
+/**
+ * Farthest distance from the trace to the planned path (the line through every drive sample).
+ * Measured by place, not time: a slow robot on the right path does not count as off.
+ */
+export function pathDeviation(plan: Plan, trace: SimPoint[]): number {
+  const path: { x: number; y: number }[] = [plan.startPose];
+  for (const st of plan.steps) {
+    if (st.kind === 'drive') for (const s of st.samples) path.push(s);
+  }
+  if (path.length < 2) return Math.max(0, ...trace.map((p) => Math.hypot(p.x - plan.startPose.x, p.y - plan.startPose.y)));
+  let worst = 0;
+  for (const p of trace) {
+    let best = Infinity;
+    for (let i = 1; i < path.length && best > worst; i++) {
+      const a = path[i - 1];
+      const b = path[i];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len2 = dx * dx + dy * dy;
+      const u = len2 > 1e-12 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+      best = Math.min(best, Math.hypot(p.x - (a.x + u * dx), p.y - (a.y + u * dy)));
+    }
+    worst = Math.max(worst, best);
+  }
+  return worst;
 }
 
 /** Pose of the simulated robot at time t (linear interpolation of the trace). */

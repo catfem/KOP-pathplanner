@@ -32,6 +32,19 @@ describe('KopFollower on a real-world robot', () => {
     expect(sim.positionError).toBeLessThan(0.06);
   });
 
+  it('keeps a mismatched robot on the path where open loop wanders off', () => {
+    // Errors can cancel out by the end of an auto, so judge by the whole path, not just the end.
+    const settings = { leftScale: 0.9, rightScale: 1, kSScale: 1.3, trackScale: 1, kVScale: 1.15, kAScale: 1.5 };
+    for (const plan of plans) {
+      const open = simulatePlan(plan, { ...robot, encoder: 'none' }, settings);
+      const closed = simulatePlan(plan, robot, settings);
+      expect(closed.maxPathDeviation).toBeLessThan(0.08);
+      expect(open.maxPathDeviation).toBeGreaterThan(3 * closed.maxPathDeviation);
+    }
+    const straight = simulatePlan(plans[1], robot, PERFECT_SIM);
+    expect(straight.maxPathDeviation).toBeLessThan(0.02);
+  });
+
   it('holds heading with a weaker side', () => {
     for (const plan of plans) {
       const sim = simulatePlan(plan, robot, { ...PERFECT_SIM, leftScale: 0.85 });

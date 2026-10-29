@@ -30,9 +30,12 @@ export function App() {
   const auto = project.autos.find((a) => a.id === selectedAutoId) ?? project.autos[0];
 
   useTheme(theme);
-  const { plan, sim, error } = usePlanning(auto, project, showSim, simSettings);
-  usePlayback(playing, plan?.totalTime ?? 0);
-  useShortcuts(plan?.totalTime ?? 0);
+  const { plan, sim, comparison, error } = usePlanning(auto, project, showSim, simSettings);
+  // The simulated robot can need longer than the plan (the follower waits for a slow robot):
+  // play until it has finished too.
+  const endTime = Math.max(plan?.totalTime ?? 0, sim?.totalTime ?? 0);
+  usePlayback(playing, endTime);
+  useShortcuts(endTime);
 
   return (
     <div className={`app${sidebarOpen ? '' : ' no-sidebar'}${inspectorOpen ? '' : ' no-inspector'}`}>
@@ -48,11 +51,11 @@ export function App() {
             <FieldView plan={plan} sim={sim} planError={error} />
           </ErrorBoundary>
           <ErrorBoundary area="the timeline">
-            <Timeline plan={plan} />
+            <Timeline plan={plan} endTime={endTime} simEnd={sim?.totalTime ?? null} />
             {chartOpen && <VelocityChart plan={plan} />}
           </ErrorBoundary>
         </main>
-        {inspectorOpen && <Inspector auto={auto} plan={plan} sim={sim} />}
+        {inspectorOpen && <Inspector auto={auto} plan={plan} sim={sim} comparison={comparison} />}
       </div>
       <datalist id="command-names">
         {project.commands.map((c) => (

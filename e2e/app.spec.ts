@@ -217,6 +217,62 @@ test('invalid numbers are flagged and do not change the robot', async ({ page })
   await expect(track).toHaveValue('0.56');
 });
 
+test('robot configs: save, load back, keep across reloads, download and load from a file', async ({ page }, testInfo) => {
+  await page.getByRole('tab', { name: 'Robot' }).click();
+  const list = page.getByRole('list', { name: 'Saved robot configs' });
+  const track = page.getByLabel('Track width (effective)');
+  await expect(page.getByText('No saved configs yet.')).toBeVisible();
+
+  await page.getByLabel('Robot config name').fill('Comp bot');
+  await page.getByRole('button', { name: 'Save current' }).click();
+  await expect(list.getByRole('listitem')).toHaveCount(1);
+  await expect(list).toContainText('In use');
+
+  // Change a setting, then load the saved config back.
+  await track.fill('0.62');
+  await track.blur();
+  await expect(list).not.toContainText('In use');
+  await page.getByRole('button', { name: 'Load Comp bot' }).click();
+  await expect(track).toHaveValue('0.56');
+  await expect(list).toContainText('In use');
+
+  await page.reload();
+  await page.getByRole('tab', { name: 'Robot' }).click();
+  await expect(list).toContainText('Comp bot');
+
+  // Download it, delete it, change the robot, and load it back from the file.
+  await page.getByRole('button', { name: 'More actions for Comp bot' }).click();
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('menuitem', { name: 'Download file' }).click()]);
+  expect(download.suggestedFilename()).toBe('comp-bot.robot.json');
+  const file = testInfo.outputPath('comp-bot.robot.json');
+  await download.saveAs(file);
+
+  await page.getByRole('button', { name: 'More actions for Comp bot' }).click();
+  await page.getByRole('menuitem', { name: 'Delete…' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete config' }).click();
+  await expect(page.getByText('No saved configs yet.')).toBeVisible();
+
+  await track.fill('0.7');
+  await track.blur();
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: 'Load from file…' }).click()]);
+  await chooser.setFiles(file);
+  await expect(track).toHaveValue('0.56');
+  await expect(list).toContainText('Comp bot');
+  await expect(list).toContainText('In use');
+});
+
+test('simulation plays until the simulated robot finishes and shows what the correction does', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Simulate' }).click();
+  // A robot heavier and slower than planned: the generated code waits for it.
+  await page.getByLabel('Heavier than planned (kA)').fill('1.8');
+  await page.getByLabel('Slower than planned (kV)').fill('1.3');
+  await expect(page.locator('.time-readout')).toContainText('simulated robot');
+  const scrubber = page.getByLabel('Timeline position');
+  const plannedEnd = Number((await page.locator('.time-readout span').first().textContent())?.replace(/[^\d.]/g, ''));
+  expect(Number(await scrubber.getAttribute('max'))).toBeGreaterThan(plannedEnd + 0.5);
+  await expect(page.locator('.sim-compare')).toContainText('Without it, this robot would stray up to');
+});
+
 test.describe('phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
   test('has no horizontal overflow', async ({ page }) => {

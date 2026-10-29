@@ -11,7 +11,20 @@ export interface MenuItem {
  * Button with a dropdown menu. Opens on click, focuses the first item, moves
  * with the arrow keys and closes on Escape, Tab or a click outside.
  */
-export function Menu({ label, items, buttonContent }: { label: string; items: MenuItem[]; buttonContent: ReactNode }) {
+export function Menu({
+  label,
+  items,
+  buttonContent,
+  buttonLabel,
+  buttonClassName = 'btn ghost',
+}: {
+  label: string;
+  items: MenuItem[];
+  buttonContent: ReactNode;
+  /** Accessible name (and tooltip) for a button that shows only an icon. */
+  buttonLabel?: string;
+  buttonClassName?: string;
+}) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -42,7 +55,9 @@ export function Menu({ label, items, buttonContent }: { label: string; items: Me
       <button
         ref={buttonRef}
         type="button"
-        className="btn ghost"
+        className={buttonClassName}
+        aria-label={buttonLabel}
+        title={buttonLabel}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
