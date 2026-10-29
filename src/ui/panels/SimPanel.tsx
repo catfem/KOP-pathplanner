@@ -119,9 +119,10 @@ export function SimPanel({ sim, comparison }: { sim: SimResult | null; compariso
           onChange={(v) => set({ trackScale: v })}
         />
         <p className="muted small">
-          With encoders, the follower waits for a slow or heavy robot instead of cutting corners, so those errors mostly cost time. Wheel
-          scrub is the one error encoders cannot see: calibrate the effective track width with the generated &ldquo;Test: turn 360°&rdquo;
-          auto to remove it.
+          These sliders only describe how the real robot differs from the Robot tab; they never change the generated code. With
+          encoders, the follower waits for a slow or heavy robot instead of cutting corners, so those errors mostly cost time. Wheel scrub
+          is the one error encoders cannot see: calibrate the track width with the generated &ldquo;Test: turn 360°&rdquo; auto and the
+          Calibration section on the Robot tab, then set Wheel scrub back to 0% here so it is not counted twice.
         </p>
         <div className="button-row">
           <button type="button" className="btn small" onClick={() => setUi({ sim: DEFAULT_SIM })}>

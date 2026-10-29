@@ -127,6 +127,14 @@ The only error encoders cannot see is wheel slip and scrub. The generated **cali
 *Test: drive 2 m* checks the wheel diameter and *Test: turn 360°* the effective track width. The
 **Estimate kV/kA** button gives a physics-based starting point until then.
 
+Enter what the robot really did in the **Calibration** section of the Robot tab: how far it drove,
+and whether the turn stopped short of the start line or went past it. The two tests depend on
+each other (the turn is measured with the wheel diameter the code was generated with), so the
+planner corrects the wheel diameter, the track width and kV/kA together from one run of both
+tests. Fixing them one at a time from the same run, or reading the turn the wrong way round,
+leaves them off or makes them worse. After applying, generate and deploy the code before testing
+again.
+
 ## Generated code
 
 | Java (`src/main/java/frc/robot/kop/`) | Python (`kop/`) | Purpose |

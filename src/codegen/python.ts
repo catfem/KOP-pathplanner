@@ -857,24 +857,32 @@ function calibrationFile(project: Project): string {
   const encoders = effectiveEncoder(r) !== 'none';
   const { drive, turn } = testTrajectories(project);
   const halfTurn = (r.trackWidth / 2) * 2 * Math.PI;
+  // Both reports name the settings this code was generated with: the planner's Calibration
+  // section must start from those.
   const driveReport = encoders
-    ? `f"drive 2 m: the encoders measured left {left:.3f} m, right {right:.3f} m. If the robot really went d "
-                f"metres, set the wheel diameter to {c.WHEEL_DIAMETER:.4f} * d / 2 m in the planner."`
-    : `f"drive 2 m (open loop). If the robot really went d metres, set kV to {c.KV:.3f} * 2 / d in the planner."`;
+    ? `f"drive 2 m: the encoders measured left {left:.3f} m, right {right:.3f} m. Measure how far the robot "
+                "really went and enter it on the planner's Robot tab, under Calibration "
+                f"(this code: wheel diameter {c.WHEEL_DIAMETER:.4f} m)."`
+    : `"drive 2 m (open loop). Measure how far the robot really went and enter it on the planner's "
+                f"Robot tab, under Calibration (this code: kV {c.KV:.3f})."`;
   const turnReport = encoders
-    ? `f"turn 360: the encoders measured left {left:.3f} m, right {right:.3f} m (planned ${float(-halfTurn, 3)} / "
-                f"${float(halfTurn, 3)} m). If the robot really turned t degrees, set the track width to "
-                f"{c.TRACK_WIDTH:.4f} * 360 / t m in the planner."`
-    : `f"turn 360 (open loop). If the robot really turned t degrees, set the track width to "
-                f"{c.TRACK_WIDTH:.4f} * 360 / t m in the planner."`;
+    ? `f"turn 360: the robot turned left (counter-clockwise); the encoders measured left {left:.3f} m, "
+                f"right {right:.3f} m (planned ${float(-halfTurn, 3)} / ${float(halfTurn, 3)} m). Check whether the front stopped short "
+                "of the start line or went past it, and by how many degrees, and enter that on the planner's "
+                f"Robot tab, under Calibration (this code: track width {c.TRACK_WIDTH:.4f} m)."`
+    : `"turn 360 (open loop): the robot turned left (counter-clockwise). Check whether the front stopped "
+                "short of the start line or went past it, and by how many degrees, and enter that on the "
+                f"planner's Robot tab, under Calibration (this code: track width {c.TRACK_WIDTH:.4f} m)."`;
   return `"""Calibration autos for the real robot.
 
 Run them in autonomous on carpet with room around the robot, then read the result in the Driver
-Station console (also on the dashboard as KOP/Test result).
+Station console (also on the dashboard as KOP/Test result) and enter what the robot really did on
+the planner's Robot tab, under Calibration. Run both tests with the same code; the planner corrects
+the two settings together.
 
 - Test: drive 2 m drives straight ahead. Measure how far the robot really went.
-- Test: turn 360° turns one full circle to the left. Put a strip of tape along a bumper first and
-  estimate how far the robot really turned.${
+- Test: turn 360° turns one full circle to the left. Put a strip of tape along a bumper first, then
+  check whether the front stopped short of the start line or went past it.${
     encoders
       ? `
 - Test: measure feedforward slowly ramps the voltage, about 1.5 m forwards and back again, and fits
