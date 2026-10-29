@@ -1,13 +1,14 @@
 // Physics simulation of the generated follower running on an imperfect robot.
 //
-// The controller below mirrors FollowKopTrajectory in the generated code:
-// per-side feedforward (kS, kV, kA) plus optional encoder position/velocity
-// feedback, re-zeroed at the start of every motion step, with a short settle
-// phase at the end. The "true" robot can differ from the model (weaker side,
-// different kS, wheel scrub) to show how far the robot drifts without a gyro.
+// The controller is KopFollower (follower.ts), the same logic as
+// FollowKopTrajectory in the generated code. The "true" robot can differ from
+// the model: a weaker side, more friction, slower or heavier than configured,
+// wheel scrub, low battery, late or coarse encoder readings, or a broken encoder.
 
+import { effectiveEncoder, metersPerEncoderUnit } from '../model/hardware';
 import type { RobotConfig } from '../model/types';
-import { feedforwardVolts, type Plan, sampleStates } from './trajectory';
+import { type EncoderFault, KopFollower, type WheelReadings } from './follower';
+import type { Plan } from './trajectory';
 
 export interface SimSettings {
   /** Torque multiplier of the left / right side (1 = matches the model). */
@@ -17,9 +18,43 @@ export interface SimSettings {
   kSScale: number;
   /** True effective track width relative to the configured one (wheel scrub). */
   trackScale: number;
+  /** True kV relative to the configured kV (above 1: the robot is slower than planned). */
+  kVScale: number;
+  /** True kA relative to the configured kA (above 1: the robot is heavier than planned). */
+  kAScale: number;
 }
 
-export const DEFAULT_SIM: SimSettings = { leftScale: 0.95, rightScale: 1.0, kSScale: 1.15, trackScale: 1.0 };
+export const PERFECT_SIM: SimSettings = { leftScale: 1, rightScale: 1, kSScale: 1, trackScale: 1, kVScale: 1, kAScale: 1 };
+export const DEFAULT_SIM: SimSettings = { leftScale: 0.95, rightScale: 1.0, kSScale: 1.15, trackScale: 1.0, kVScale: 1.05, kAScale: 1.2 };
+
+/** Hardware effects that are not settings in the UI (used by tests and the defaults below). */
+export interface PlantOptions {
+  /** Extra friction per side while turning (tread scrub), V. */
+  scrubVolts: number;
+  /** Battery voltage under load; outputs above it saturate. */
+  supplyVolts: number;
+  /** Encoder readings arrive this many control loops late (CAN status frames). */
+  latencyLoops: number;
+  /** Encoder resolution, m (0 = exact). */
+  resolution: number;
+  /** Encoder direction per side: 1 normal, -1 wired backwards, 0 not counting. */
+  leftEncoder: number;
+  rightEncoder: number;
+}
+
+/** Typical KOP hardware for the robot's encoder setup. */
+export function defaultPlant(robot: RobotConfig): PlantOptions {
+  const enc = effectiveEncoder(robot);
+  return {
+    scrubVolts: 0,
+    supplyVolts: 12,
+    latencyLoops: enc === 'integrated' ? 1 : 0,
+    // 4x decoding of a quadrature encoder resolves a quarter of a cycle.
+    resolution: enc === 'rio' ? metersPerEncoderUnit(robot) / 4 : 0,
+    leftEncoder: 1,
+    rightEncoder: 1,
+  };
+}
 
 export interface SimPoint {
   t: number;
@@ -34,6 +69,10 @@ export interface SimResult {
   positionError: number;
   headingErrorDeg: number;
   closedLoop: boolean;
+  /** Encoder fault the follower detected (it then finished open loop). */
+  fault: EncoderFault | null;
+  /** Steps that gave up because the robot could not reach the target. */
+  timeouts: number;
 }
 
 const PHYSICS_DT = 0.002;
@@ -44,16 +83,14 @@ interface Side {
   vel: number;
 }
 
-function stepSide(side: Side, volts: number, scale: number, robot: RobotConfig, kSScale: number, dt: number): void {
-  const kS = robot.kS * kSScale;
-  const vEff = volts * scale;
-  if (Math.abs(side.vel) < 1e-3 && Math.abs(vEff) <= kS) {
+function stepSide(side: Side, volts: number, kS: number, kV: number, kA: number, dt: number): void {
+  if (Math.abs(side.vel) < 1e-3 && Math.abs(volts) <= kS) {
     side.vel = 0;
     return;
   }
   const moving = Math.abs(side.vel) >= 1e-3;
-  const dir = moving ? Math.sign(side.vel) : Math.sign(vEff);
-  const acc = (vEff - kS * dir - robot.kV * side.vel) / Math.max(1e-3, robot.kA);
+  const dir = moving ? Math.sign(side.vel) : Math.sign(volts);
+  const acc = (volts - kS * dir - kV * side.vel) / Math.max(1e-3, kA);
   let next = side.vel + acc * dt;
   // Friction stops the wheel when it crosses zero; it breaks away again next step if pushed hard enough.
   if (moving && Math.sign(next) !== Math.sign(side.vel)) next = 0;
@@ -61,59 +98,23 @@ function stepSide(side: Side, volts: number, scale: number, robot: RobotConfig, 
   side.pos += side.vel * dt;
 }
 
-const MAX_STEER = 0.35; // rad
-const STEER_FULL_SPEED = 0.3; // m/s
-
-/**
- * Encoder-only odometry of the follower, relative to the start of one motion
- * step. Mirrors the odometry in the generated follower.
- */
-export class FollowerOdometry {
-  x: number;
-  y: number;
-  heading: number;
-  private lastLeft = 0;
-  private lastRight = 0;
-
-  constructor(
-    start: { x: number; y: number; heading: number },
-    private readonly trackWidth: number,
-  ) {
-    this.x = start.x;
-    this.y = start.y;
-    this.heading = start.heading;
-  }
-
-  update(leftDistance: number, rightDistance: number): void {
-    const dl = leftDistance - this.lastLeft;
-    const dr = rightDistance - this.lastRight;
-    this.lastLeft = leftDistance;
-    this.lastRight = rightDistance;
-    const dTheta = (dr - dl) / this.trackWidth;
-    const d = (dl + dr) / 2;
-    this.x += d * Math.cos(this.heading + dTheta / 2);
-    this.y += d * Math.sin(this.heading + dTheta / 2);
-    this.heading += dTheta;
-  }
-
-  /**
-   * Stanley-style steering: turns towards the path when the robot drifts
-   * sideways. Returned as a wheel distance added to the right setpoint and
-   * subtracted from the left one.
-   */
-  steeringShift(sp: { x: number; y: number; v: number }, robot: Pick<RobotConfig, 'kLateral' | 'trackWidth'>): number {
-    if (robot.kLateral <= 0 || Math.abs(sp.v) < 1e-3) return 0;
-    const dx = sp.x - this.x;
-    const dy = sp.y - this.y;
-    const lateral = -Math.sin(this.heading) * dx + Math.cos(this.heading) * dy;
-    const speedScale = Math.min(1, Math.abs(sp.v) / STEER_FULL_SPEED);
-    const steer = Math.max(-MAX_STEER, Math.min(MAX_STEER, Math.atan(robot.kLateral * lateral)));
-    return Math.sign(sp.v) * speedScale * steer * (robot.trackWidth / 2);
-  }
+/** How much of the motion is rotation in place: 0 driving straight, 1 spinning. */
+function turnFraction(a: number, b: number): number {
+  const sum = Math.abs(a) + Math.abs(b);
+  return sum > 1e-6 ? Math.abs(b - a) / sum : 0;
 }
 
-export function simulatePlan(plan: Plan, robot: RobotConfig, settings: SimSettings): SimResult {
-  const closedLoop = robot.encoder !== 'none';
+export function simulatePlan(
+  plan: Plan,
+  robot: RobotConfig,
+  settings: SimSettings,
+  plantOptions: Partial<PlantOptions> = {},
+): SimResult {
+  const plant = { ...defaultPlant(robot), ...plantOptions };
+  const closedLoop = effectiveEncoder(robot) !== 'none';
+  const kS = robot.kS * settings.kSScale;
+  const kV = robot.kV * settings.kVScale;
+  const kA = robot.kA * settings.kAScale;
   const left: Side = { pos: 0, vel: 0 };
   const right: Side = { pos: 0, vel: 0 };
   let x = plan.startPose.x;
@@ -122,15 +123,32 @@ export function simulatePlan(plan: Plan, robot: RobotConfig, settings: SimSettin
   let t = 0;
   const trace: SimPoint[] = [{ t, x, y, heading }];
   const trueTrack = robot.trackWidth * settings.trackScale;
+  let fault: EncoderFault | null = null;
+  let timeouts = 0;
+
+  const quantize = (v: number) => (plant.resolution > 0 ? Math.round(v / plant.resolution) * plant.resolution : v);
+  const measure = (): WheelReadings => ({
+    left: quantize(left.pos * plant.leftEncoder),
+    right: quantize(right.pos * plant.rightEncoder),
+    leftVel: left.vel * plant.leftEncoder,
+    rightVel: right.vel * plant.rightEncoder,
+  });
+  const history: WheelReadings[] = [];
+  const read = (): WheelReadings => history[Math.max(0, history.length - 1 - plant.latencyLoops)];
 
   const integrate = (lv: number, rv: number, duration: number) => {
+    const supply = plant.supplyVolts;
+    const lOut = Math.max(-supply, Math.min(supply, lv)) * settings.leftScale;
+    const rOut = Math.max(-supply, Math.min(supply, rv)) * settings.rightScale;
     const steps = Math.max(1, Math.round(duration / PHYSICS_DT));
     const h = duration / steps;
     for (let i = 0; i < steps; i++) {
       const l0 = left.pos;
       const r0 = right.pos;
-      stepSide(left, lv, settings.leftScale, robot, settings.kSScale, h);
-      stepSide(right, rv, settings.rightScale, robot, settings.kSScale, h);
+      const moving = Math.abs(left.vel) + Math.abs(right.vel) > 1e-3;
+      const scrub = plant.scrubVolts * (moving ? turnFraction(left.vel, right.vel) : turnFraction(lOut, rOut));
+      stepSide(left, lOut, kS + scrub, kV, kA, h);
+      stepSide(right, rOut, kS + scrub, kV, kA, h);
       const dl = left.pos - l0;
       const dr = right.pos - r0;
       const dCenter = (dl + dr) / 2;
@@ -141,8 +159,12 @@ export function simulatePlan(plan: Plan, robot: RobotConfig, settings: SimSettin
     }
     t += duration;
     trace.push({ t, x, y, heading });
+    history.push(measure());
+    if (history.length > 8) history.shift();
   };
+  history.push(measure());
 
+  let encodersWork = closedLoop;
   for (const st of plan.steps) {
     if (st.kind === 'command' || st.kind === 'wait') {
       // The robot coasts to a stop with zero output while actions run.
@@ -154,41 +176,20 @@ export function simulatePlan(plan: Plan, robot: RobotConfig, settings: SimSettin
       }
       continue;
     }
-    const l0 = left.pos;
-    const r0 = right.pos;
-    const odom = new FollowerOdometry(st.samples[0], robot.trackWidth);
-    let local = 0;
-    const settleLimit = st.duration + (closedLoop ? robot.maxSettleTime : 0);
-    for (;;) {
-      const done = local >= st.duration;
-      const sp = sampleStates(st.samples, Math.min(local, st.duration));
-      // Feedforward for the middle of the coming control period (zero-order hold).
-      const ff = sampleStates(st.samples, Math.min(local + CONTROL_DT / 2, st.duration));
-      let lv = done ? 0 : feedforwardVolts(robot, ff.lVel, ff.lAcc);
-      let rv = done ? 0 : feedforwardVolts(robot, ff.rVel, ff.rAcc);
-      if (closedLoop) {
-        odom.update(left.pos - l0, right.pos - r0);
-        const shift = done ? 0 : odom.steeringShift(sp, robot);
-        const le = sp.lPos - shift - (left.pos - l0);
-        const re = sp.rPos + shift - (right.pos - r0);
-        if (done && Math.abs(le) < robot.positionTolerance && Math.abs(re) < robot.positionTolerance) break;
-        const diff = (re - le) / 2;
-        lv += robot.kP * le + robot.kD * (sp.lVel - left.vel) - robot.kPTurn * diff;
-        rv += robot.kP * re + robot.kD * (sp.rVel - right.vel) + robot.kPTurn * diff;
-        if (done) {
-          if (Math.abs(le) >= robot.positionTolerance) lv += robot.kS * Math.sign(le);
-          if (Math.abs(re) >= robot.positionTolerance) rv += robot.kS * Math.sign(re);
-        }
-      } else if (done) {
-        break;
-      }
-      if (local >= settleLimit) break;
-      const max = robot.maxVoltage;
-      lv = Math.max(-max, Math.min(max, lv));
-      rv = Math.max(-max, Math.min(max, rv));
-      integrate(lv, rv, CONTROL_DT);
-      local += CONTROL_DT;
+    const follower = new KopFollower(st.samples, robot, encodersWork);
+    follower.initialize(read());
+    let dt = 0;
+    for (let loop = 0; loop < 5000; loop++) {
+      const out = follower.execute(dt, read());
+      if (follower.finished) break;
+      integrate(out.left, out.right, CONTROL_DT);
+      dt = CONTROL_DT;
     }
+    if (follower.fault) {
+      fault = follower.fault;
+      encodersWork = false;
+    }
+    if (follower.timedOut) timeouts += 1;
     // The finishing loop stops the motors before the next command starts.
     integrate(0, 0, CONTROL_DT);
   }
@@ -198,7 +199,7 @@ export function simulatePlan(plan: Plan, robot: RobotConfig, settings: SimSettin
   const positionError = Math.hypot(x - plan.endPose.x, y - plan.endPose.y);
   let dh = ((heading - plan.endPose.heading) * 180) / Math.PI;
   dh = ((dh + 180) % 360 + 360) % 360 - 180;
-  return { trace, totalTime: t, positionError, headingErrorDeg: dh, closedLoop };
+  return { trace, totalTime: t, positionError, headingErrorDeg: dh, closedLoop, fault, timeouts };
 }
 
 /** Pose of the simulated robot at time t (linear interpolation of the trace). */

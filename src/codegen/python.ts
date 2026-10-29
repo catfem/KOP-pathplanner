@@ -2,6 +2,7 @@
 
 import { CONTROLLERS, PWM_CLASS, effectiveEncoder, metersPerEncoderUnit } from '../model/hardware';
 import type { Project, RobotConfig } from '../model/types';
+import { FOLLOWER } from '../planner/follower';
 import {
   type GeneratedFile,
   type IRAuto,
@@ -14,15 +15,19 @@ import {
   num,
   avoidReserved,
   quote,
+  realRobotChecklist,
   snakeCase,
+  TEST_DRIVE_METERS,
+  testTrajectories,
   uniqueNames,
 } from './common';
+import type { TrajState } from '../planner/trajectory';
 
 const PYTHON_RESERVED = new Set([
   'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else',
   'except', 'false', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'none',
   'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'true', 'try', 'while', 'with', 'yield',
-  'build_chooser', 'commands2', 'wpilib', 'auto_data', 'c', 'get_command', 'math',
+  'build_chooser', 'commands2', 'wpilib', 'auto_data', 'calibration', 'c', 'get_command', 'math',
 ]);
 
 function pyBool(v: boolean): string {
@@ -59,6 +64,8 @@ INVERT_LEFT = ${pyBool(r.invertLeft)}
 INVERT_RIGHT = ${pyBool(r.invertRight)}
 BRAKE_MODE = ${pyBool(r.brakeMode)}
 CURRENT_LIMIT_AMPS = ${Math.round(r.currentLimit)}
+# Teleop joystick deadband for arcade_drive.
+JOYSTICK_DEADBAND = 0.05
 
 # ---- Encoders ----
 # False runs the autos open loop (time based) using only feedforward.
@@ -140,6 +147,7 @@ class KopTrajectory:
 }
 
 function followerFile(): string {
+  const F = FOLLOWER;
   return `"""Trajectory follower for a differential drive without a gyro."""
 
 import math
@@ -149,36 +157,122 @@ import wpilib
 
 from . import constants as c
 
-MAX_STEER_RADIANS = 0.35
-STEER_FULL_SPEED = 0.3
 LOOP_PERIOD = 0.02
+# Progress clock: slows down when a wheel lags its setpoint by LAG_SLOW, stops at LAG_STOP (m).
+LAG_SLOW = ${float(F.lagSlow)}
+LAG_STOP = ${float(F.lagStop)}
+RATE_DOWN = ${float(F.rateDown)}
+RATE_UP = ${float(F.rateUp)}
+# A step ends when both wheels are slower than this (m/s) and the heading is within tolerance.
+SETTLE_SPEED = ${float(F.settleSpeed)}
+HEADING_TOLERANCE_DEGREES = ${float(F.headingTolerance)}
+# Settling: a wheel should approach its target at APPROACH_GAIN * error (at most APPROACH_SPEED);
+# extra volts build up while it is slower (static friction, scrub) and drain while it is faster.
+APPROACH_GAIN = ${float(F.approachGain)}
+APPROACH_SPEED = ${float(F.approachSpeed)}
+BOOST_VOLTS_PER_SECOND = ${float(F.boostRate)}
+BOOST_MAX_VOLTS = ${float(F.boostMax)}
+# Heading integral (integral time, limit).
+TURN_INTEGRAL_SECONDS = ${float(F.turnIntegralTime)}
+TURN_INTEGRAL_MAX_VOLTS = ${float(F.turnIntegralMax)}
+# Path correction.
+MAX_STEER_RADIANS = ${float(F.maxSteer)}
+STEER_FULL_SPEED = ${float(F.steerFullSpeed)}
+# Encoder checks against the setpoints.
+CHECK_PLANNED = ${float(F.checkPlanned)}
+CHECK_SILENT = ${float(F.checkSilent)}
+CHECK_BACKWARDS = ${float(F.checkBackwards)}
+SILENT_SECONDS = ${float(F.silentTime)}
+
+# Set when an encoder could not be trusted; every later trajectory then runs open loop.
+_encoder_fault = None
 
 
-def _feedforward(velocity: float, acceleration: float) -> float:
-    if abs(velocity) > 1e-4:
-        direction = math.copysign(1.0, velocity)
-    elif abs(acceleration) > 1e-4:
-        direction = math.copysign(1.0, acceleration)
-    else:
-        direction = 0.0
-    return c.KS * direction + c.KV * velocity + c.KA * acceleration
+def get_encoder_fault():
+    """The encoder problem found during an auto, or None. Cleared when the robot code restarts."""
+    return _encoder_fault
 
 
-def _clamp(volts: float) -> float:
-    return max(-c.MAX_VOLTAGE, min(c.MAX_VOLTAGE, volts))
+def clear_encoder_fault() -> None:
+    """Trusts the encoders again (after fixing the problem without restarting the robot code)."""
+    global _encoder_fault
+    _encoder_fault = None
+    wpilib.SmartDashboard.putString("KOP/Encoder fault", "")
 
 
 def _sign(x: float) -> float:
     return math.copysign(1.0, x) if x != 0 else 0.0
 
 
-class FollowKopTrajectory(commands2.Command):
-    """Follows a KopTrajectory using per-side feedforward plus optional encoder feedback.
+def _turn_tolerance() -> float:
+    """Wheel error (m) that keeps the heading within HEADING_TOLERANCE_DEGREES."""
+    return c.TRACK_WIDTH / 2.0 * math.radians(HEADING_TOLERANCE_DEGREES)
 
-    With encoders it adds wheel position/velocity feedback (KP, KD), heading hold on the
-    difference between the left and right errors (KP_TURN), and path correction from
-    encoder-only odometry that steers back towards the path when the robot drifts sideways
-    (K_LATERAL). No gyro is needed. Without encoders the profile is played back open loop.
+
+def _lag(error: float, velocity: float) -> float:
+    """Distance a wheel is behind its setpoint along its direction of travel (negative when ahead)."""
+    return error * _sign(velocity) if abs(velocity) > 0.02 else 0.0
+
+
+def _boost(current: float, error: float, velocity: float, dt: float) -> float:
+    """Extra voltage for one wheel while settling (signed).
+
+    It builds up while the wheel approaches its target too slowly, drains while it is too fast,
+    and resets once the wheel reaches or passes the target.
+    """
+    if abs(error) <= _turn_tolerance() / 2.0 or current * error < 0.0:
+        return 0.0
+    toward = velocity * _sign(error)
+    wanted = min(APPROACH_SPEED, APPROACH_GAIN * abs(error))
+    size = abs(current)
+    if toward < wanted * 0.75:
+        size = min(BOOST_MAX_VOLTS, size + BOOST_VOLTS_PER_SECOND * dt)
+    elif toward > wanted * 1.25:
+        size = max(0.0, size - BOOST_VOLTS_PER_SECOND * dt)
+    return size * _sign(error)
+
+
+def _wrong_way(position: float, velocity: float, measured: float) -> bool:
+    # The progress clock waits for a lagging robot, so judge direction by where the setpoint heads.
+    direction = _sign(velocity) if abs(velocity) > 1e-3 else _sign(position)
+    return direction * measured < -CHECK_BACKWARDS
+
+
+def _silent(planned: float, measured: float) -> bool:
+    return abs(planned) > CHECK_PLANNED and abs(measured) < CHECK_SILENT
+
+
+def _tracking(planned: float, measured: float) -> bool:
+    return abs(planned) > CHECK_PLANNED and planned * measured > 0.0 and abs(measured) > abs(planned) / 2.0
+
+
+def _fault_message(left: bool, kind: str) -> str:
+    side = "left" if left else "right"
+    constant = "INVERT_LEFT" if left else "INVERT_RIGHT"
+    if kind == "backwards":
+        return (
+            f"the {side} side moved the opposite way to its motors. If the {side} wheels turned the "
+            f"wrong way, flip {constant}; otherwise flip {constant}_ENCODER."
+        )
+    return (
+        f"the {side} side is not moving or its encoder is not counting. Check the encoder wiring, "
+        "ports or CAN ID (a thrown chain or tripped breaker looks the same)."
+    )
+
+
+class FollowKopTrajectory(commands2.Command):
+    """Follows a KopTrajectory without a gyro.
+
+    Each side gets feedforward (KS, KV, KA) from its wheel profile. With encoders it adds wheel
+    position/velocity feedback (KP, KD); heading hold on the difference between the left and right
+    errors (KP_TURN, plus an integral so a weaker side does not leave a steady heading error); path
+    correction from encoder-only odometry (K_LATERAL); a progress clock that slows the setpoints
+    down and waits when the robot falls behind (heavier or slower than planned, low battery, tread
+    scrub), so the path keeps its shape; a settle phase that ends the step once both wheels are on
+    target and slow, pushing harder on a wheel stuck short of its target; and encoder checks: a side
+    that moves the wrong way or does not count stops the closed loop (no runaway), the auto finishes
+    open loop and the Driver Station shows the fix. Without encoders the profile is played back
+    open loop (time based).
 
     \`mirror\` is called when the command starts; True mirrors the path (left/right turns swap).
     """
@@ -193,8 +287,18 @@ class FollowKopTrajectory(commands2.Command):
         self.closed_loop = False
         self.mirrored = False
         self.finished = False
+        # Progress along the trajectory in seconds. Markers trigger on this, not on wall time.
+        self.progress = 0.0
+        self.rate = 1.0
+        self.last_time = 0.0
+        self.settle_time = 0.0
+        self.silent_time = 0.0
+        self.left_boost = 0.0
+        self.right_boost = 0.0
+        self.turn_integral = 0.0
         self.left_start = 0.0
         self.right_start = 0.0
+        self.sp = None
         # Encoder-only odometry in the trajectory's frame.
         self.odom_x = 0.0
         self.odom_y = 0.0
@@ -204,14 +308,22 @@ class FollowKopTrajectory(commands2.Command):
         self.addRequirements(drive)
 
     def initialize(self):
-        self.closed_loop = c.USE_ENCODERS and self.drive.has_encoders()
+        self.closed_loop = c.USE_ENCODERS and self.drive.has_encoders() and _encoder_fault is None
         self.mirrored = bool(self.mirror())
         self.finished = False
         self.started = False
+        self.progress = 0.0
+        self.rate = 1.0
+        self.last_time = 0.0
+        self.settle_time = 0.0
+        self.silent_time = 0.0
+        self.left_boost = 0.0
+        self.right_boost = 0.0
+        self.turn_integral = 0.0
         self.left_start = self.drive.get_left_distance()
         self.right_start = self.drive.get_right_distance()
-        start = self.trajectory.sample(0.0)
-        self.odom_x, self.odom_y, self.odom_heading = start.x, start.y, start.heading
+        self.sp = self.trajectory.sample(0.0)
+        self.odom_x, self.odom_y, self.odom_heading = self.sp.x, self.sp.y, self.sp.heading
         self.last_left = 0.0
         self.last_right = 0.0
 
@@ -220,54 +332,96 @@ class FollowKopTrajectory(commands2.Command):
         if not self.started:
             self.timer.restart()
             self.started = True
-        t = self.timer.get()
+        now = self.timer.get()
+        dt = max(0.0, min(0.1, now - self.last_time))
+        self.last_time = now
         total = self.trajectory.total_time
-        profile_done = t >= total
-        sp = self.trajectory.sample(min(t, total))
+        self.progress = min(total, self.progress + self.rate * dt)
+        following = self.progress < total
+        sp = self.sp = self.trajectory.sample(self.progress)
         # Feedforward targets the middle of the coming loop period.
-        ff = self.trajectory.sample(min(t + LOOP_PERIOD / 2.0, total))
+        ff = self.trajectory.sample(min(total, self.progress + self.rate * LOOP_PERIOD / 2.0))
 
-        # Everything below works in the trajectory's frame; a mirrored path swaps the sides.
-        left_volts = 0.0 if profile_done else _feedforward(ff.left_velocity, ff.left_acceleration)
-        right_volts = 0.0 if profile_done else _feedforward(ff.right_velocity, ff.right_acceleration)
+        left_volts = self._feedforward(ff.left_velocity, ff.left_acceleration) if following else 0.0
+        right_volts = self._feedforward(ff.right_velocity, ff.right_acceleration) if following else 0.0
 
-        if self.closed_loop:
-            left = self.drive.get_left_distance() - self.left_start
-            right = self.drive.get_right_distance() - self.right_start
-            left_vel = self.drive.get_left_velocity()
-            right_vel = self.drive.get_right_velocity()
-            if self.mirrored:
-                left, right = right, left
-                left_vel, right_vel = right_vel, left_vel
-            self._update_odometry(left, right)
-            shift = 0.0 if profile_done else self._steering_shift(sp)
-            left_error = sp.left_position - shift - left
-            right_error = sp.right_position + shift - right
-            in_tolerance = abs(left_error) < c.POSITION_TOLERANCE and abs(right_error) < c.POSITION_TOLERANCE
-            if profile_done and (in_tolerance or t >= total + c.MAX_SETTLE_SECONDS):
-                self.finished = True
-                self.drive.stop_drive()
-                return
-            heading_error = (right_error - left_error) / 2.0
-            left_volts += c.KP * left_error + c.KD * (sp.left_velocity - left_vel) - c.KP_TURN * heading_error
-            right_volts += c.KP * right_error + c.KD * (sp.right_velocity - right_vel) + c.KP_TURN * heading_error
-            if profile_done:
-                # Settling on the final position: push through static friction.
-                if abs(left_error) >= c.POSITION_TOLERANCE:
-                    left_volts += c.KS * _sign(left_error)
-                if abs(right_error) >= c.POSITION_TOLERANCE:
-                    right_volts += c.KS * _sign(right_error)
-        elif profile_done:
-            self.finished = True
-            self.drive.stop_drive()
+        if not self.closed_loop:
+            if following:
+                self._output(left_volts, right_volts)
+            else:
+                self._finish()
             return
 
+        # Everything below works in the trajectory's frame; a mirrored path swaps the sides.
+        left = self.drive.get_left_distance() - self.left_start
+        right = self.drive.get_right_distance() - self.right_start
+        left_vel = self.drive.get_left_velocity()
+        right_vel = self.drive.get_right_velocity()
         if self.mirrored:
-            self.drive.set_wheel_voltages(_clamp(right_volts), _clamp(left_volts))
-            self.drive.set_target_pose(sp.x, c.FIELD_WIDTH - sp.y, -sp.heading)
+            left, right = right, left
+            left_vel, right_vel = right_vel, left_vel
+
+        if self._check_encoders(left, right, dt):
+            # No encoders from here on: finish the step open loop.
+            self.rate = 1.0
+            if following:
+                self._output(left_volts, right_volts)
+            else:
+                self._finish()
+            return
+
+        self._update_odometry(left, right)
+        shift = self._steering_shift(sp) if following else 0.0
+        left_error = sp.left_position - shift - left
+        right_error = sp.right_position + shift - right
+
+        if following:
+            # Slow the clock while the robot lags behind its setpoints, and stop it when far behind.
+            behind = max(
+                0.0,
+                _lag(sp.left_position - left, sp.left_velocity),
+                _lag(sp.right_position - right, sp.right_velocity),
+            )
+            target = max(0.0, min(1.0, 1.0 - (behind - LAG_SLOW) / (LAG_STOP - LAG_SLOW)))
+            if target < self.rate:
+                self.rate = max(target, self.rate - RATE_DOWN * dt)
+            else:
+                self.rate = min(target, self.rate + RATE_UP * dt)
         else:
-            self.drive.set_wheel_voltages(_clamp(left_volts), _clamp(right_volts))
-            self.drive.set_target_pose(sp.x, sp.y, sp.heading)
+            self.settle_time += dt
+            distance_error = abs(left_error + right_error) / 2.0
+            turn_error = abs(right_error - left_error) / 2.0
+            on_target = distance_error < c.POSITION_TOLERANCE and turn_error < _turn_tolerance()
+            slow = abs(left_vel) < SETTLE_SPEED and abs(right_vel) < SETTLE_SPEED
+            if (on_target and slow) or self.settle_time >= c.MAX_SETTLE_SECONDS:
+                self._finish()
+                return
+        if now > 2.0 * total + 2.0:
+            # Blocked (e.g. against a wall): give up on this step instead of stalling the auto.
+            wpilib.reportWarning(
+                "KOP auto: a step could not reach its target in time (robot blocked or too weak for the plan), moving on"
+            )
+            self._finish()
+            return
+
+        heading_error = (right_error - left_error) / 2.0
+        if following:
+            self.turn_integral = max(
+                -TURN_INTEGRAL_MAX_VOLTS,
+                min(TURN_INTEGRAL_MAX_VOLTS, self.turn_integral + c.KP_TURN * heading_error / TURN_INTEGRAL_SECONDS * dt),
+            )
+        else:
+            self.turn_integral = 0.0
+        turn_volts = c.KP_TURN * heading_error + self.turn_integral
+        left_volts += c.KP * left_error + c.KD * (self.rate * sp.left_velocity - left_vel) - turn_volts
+        right_volts += c.KP * right_error + c.KD * (self.rate * sp.right_velocity - right_vel) + turn_volts
+        if not following:
+            # Settling on the final position: push through static friction, harder while a wheel is stuck.
+            self.left_boost = _boost(self.left_boost, left_error, left_vel, dt)
+            self.right_boost = _boost(self.right_boost, right_error, right_vel, dt)
+            left_volts += c.KS * _sign(left_error) + self.left_boost
+            right_volts += c.KS * _sign(right_error) + self.right_boost
+        self._output(left_volts, right_volts)
 
     def isFinished(self) -> bool:
         return self.finished
@@ -275,6 +429,62 @@ class FollowKopTrajectory(commands2.Command):
     def end(self, interrupted: bool):
         self.timer.stop()
         self.drive.stop_drive()
+
+    def _finish(self) -> None:
+        self.finished = True
+        self.drive.stop_drive()
+
+    def _output(self, left_volts: float, right_volts: float) -> None:
+        """Limits both sides by the same factor so the robot keeps turning at the planned ratio."""
+        peak = max(abs(left_volts), abs(right_volts))
+        if peak > c.MAX_VOLTAGE:
+            left_volts *= c.MAX_VOLTAGE / peak
+            right_volts *= c.MAX_VOLTAGE / peak
+        sp = self.sp
+        if self.mirrored:
+            self.drive.set_wheel_voltages(right_volts, left_volts)
+            self.drive.set_target_pose(sp.x, c.FIELD_WIDTH - sp.y, -sp.heading)
+        else:
+            self.drive.set_wheel_voltages(left_volts, right_volts)
+            self.drive.set_target_pose(sp.x, sp.y, sp.heading)
+
+    def _check_encoders(self, left: float, right: float, dt: float) -> bool:
+        """Compares how far each side has moved with its setpoint.
+
+        Returns True, and stops using the encoders, when one cannot be trusted.
+        """
+        global _encoder_fault
+        sp = self.sp
+        if _wrong_way(sp.left_position, sp.left_velocity, left):
+            left_kind = "backwards"
+        elif _silent(sp.left_position, left) and _tracking(sp.right_position, right):
+            left_kind = "not counting"
+        else:
+            left_kind = None
+        if _wrong_way(sp.right_position, sp.right_velocity, right):
+            right_kind = "backwards"
+        elif _silent(sp.right_position, right) and _tracking(sp.left_position, left):
+            right_kind = "not counting"
+        else:
+            right_kind = None
+        message = None
+        if left_kind or right_kind:
+            # Report the physical side: a mirrored path swapped them.
+            physical_left = (left_kind is not None) != self.mirrored
+            message = _fault_message(physical_left, left_kind or right_kind)
+        else:
+            # Both silent while both setpoints moved: wait a moment in case the robot is slow to start.
+            both_silent = _silent(sp.left_position, left) and _silent(sp.right_position, right)
+            self.silent_time = self.silent_time + dt if both_silent else 0.0
+            if self.silent_time > SILENT_SECONDS:
+                message = "neither encoder is counting. Check their wiring, ports or CAN IDs."
+        if message is None:
+            return False
+        _encoder_fault = message
+        self.closed_loop = False
+        wpilib.reportError(f"KOP auto: {message} Finishing the auto open loop.")
+        wpilib.SmartDashboard.putString("KOP/Encoder fault", message)
+        return True
 
     def _update_odometry(self, left: float, right: float) -> None:
         d_left = left - self.last_left
@@ -298,6 +508,15 @@ class FollowKopTrajectory(commands2.Command):
         speed_scale = min(1.0, abs(velocity) / STEER_FULL_SPEED)
         steer = max(-MAX_STEER_RADIANS, min(MAX_STEER_RADIANS, math.atan(c.K_LATERAL * lateral_error)))
         return _sign(velocity) * speed_scale * steer * c.TRACK_WIDTH / 2.0
+
+    def _feedforward(self, velocity: float, acceleration: float) -> float:
+        if abs(velocity) > 1e-4:
+            direction = _sign(velocity)
+        elif abs(acceleration) > 1e-4:
+            direction = _sign(acceleration)
+        else:
+            direction = 0.0
+        return c.KS * direction + c.KV * self.rate * velocity + c.KA * self.rate * self.rate * acceleration
 `;
 }
 
@@ -481,6 +700,9 @@ function drivetrainFile(robot: RobotConfig): string {
       '        self.right_encoder = wpilib.Encoder(c.RIGHT_ENCODER_PORTS[0], c.RIGHT_ENCODER_PORTS[1], c.INVERT_RIGHT_ENCODER)',
       '        self.left_encoder.setDistancePerPulse(c.METERS_PER_ENCODER_UNIT)',
       '        self.right_encoder.setDistancePerPulse(c.METERS_PER_ENCODER_UNIT)',
+      '        # Average the rate over a whole encoder cycle (4x decoding) for a steadier speed reading.',
+      '        self.left_encoder.setSamplesToAverage(4)',
+      '        self.right_encoder.setSamplesToAverage(4)',
     );
     leftDist = 'self.left_encoder.getDistance()';
     rightDist = 'self.right_encoder.getDistance()';
@@ -498,8 +720,10 @@ function drivetrainFile(robot: RobotConfig): string {
   return `"""Ready-to-use drivetrain subsystem for the KOP chassis. No gyro is used.
 
 ${hardwareDoc}
-${encoderDoc} Before running autos, check on blocks: driving forward must make both
-distances increase; flip the INVERT_* constants if not.
+${encoderDoc} Before running autos, check the directions: with the robot disabled, roll it
+forward (or turn the wheels forward on blocks) and watch KOP/Left distance and KOP/Right distance
+on the dashboard. Both must go up; flip INVERT_*_ENCODER in constants.py if not. Then drive
+forward in teleop: if a side spins backwards, flip INVERT_LEFT/INVERT_RIGHT.
 
 Any drivetrain can run the generated autos if it provides the same methods:
 set_wheel_voltages, get_left_distance, get_right_distance, get_left_velocity,
@@ -508,6 +732,7 @@ get_right_velocity, has_encoders, reset_pose, set_target_pose and stop_drive.
 
 ${importBlock}
 from wpilib.drive import DifferentialDrive
+from wpimath import applyDeadband
 from wpimath.geometry import Pose2d, Rotation2d
 
 from . import constants as c
@@ -539,7 +764,9 @@ ${setPercent.join('\n')}
 
     def arcade_drive(self, forward: float, rotation: float) -> None:
         """Arcade drive for teleop. Rotation is counter-clockwise positive."""
-        speeds = DifferentialDrive.arcadeDriveIK(forward, rotation, True)
+        speeds = DifferentialDrive.arcadeDriveIK(
+            applyDeadband(forward, c.JOYSTICK_DEADBAND), applyDeadband(rotation, c.JOYSTICK_DEADBAND), True
+        )
         self.tank_drive_percent(speeds.left, speeds.right)
 
     def arcade_drive_command(self, forward, rotation) -> commands2.Command:
@@ -584,6 +811,11 @@ ${setPercent.join('\n')}
     def periodic(self) -> None:
         left = self.get_left_distance()
         right = self.get_right_distance()
+        # Roll the robot forward by hand: both distances must go up (see KOP_AUTOS_README.md).
+        wpilib.SmartDashboard.putNumber("KOP/Left distance (m)", left)
+        wpilib.SmartDashboard.putNumber("KOP/Right distance (m)", right)
+        wpilib.SmartDashboard.putNumber("KOP/Left speed (m per s)", self.get_left_velocity())
+        wpilib.SmartDashboard.putNumber("KOP/Right speed (m per s)", self.get_right_velocity())
         d_left = left - self.last_left
         d_right = right - self.last_right
         self.last_left = left
@@ -608,16 +840,262 @@ function stepExpr(step: IRStep, dataPrefix: string): string {
     case 'turn':
       return `_follow(drive, mirror, auto_data.${dataPrefix}_${step.data})`;
     case 'drive': {
-      const follow = `_follow(drive, mirror, auto_data.${dataPrefix}_${step.data})`;
-      if (step.markers.length === 0) return follow;
-      const markers = step.markers.map((m) =>
-        m.time < 1e-3
-          ? `get_command(${quote(m.name)})`
-          : `commands2.WaitCommand(${float(m.time, 3)}).andThen(get_command(${quote(m.name)}))`,
-      );
-      return `commands2.ParallelDeadlineGroup(\n            ${follow},\n            ${markers.join(',\n            ')},\n        )`;
+      if (step.markers.length === 0) return `_follow(drive, mirror, auto_data.${dataPrefix}_${step.data})`;
+      const markers = step.markers.map((m) => `(${float(m.time, 3)}, ${quote(m.name)})`);
+      return `_follow(\n            drive,\n            mirror,\n            auto_data.${dataPrefix}_${step.data},\n            ${markers.join(',\n            ')},\n        )`;
     }
   }
+}
+
+function trajectoryLiteral(name: string, samples: TrajState[], comment: string): string {
+  const rows = samples.map((st) => `        (${formatRow(st).join(', ')}),`);
+  return `# ${commentSafe(comment)}\n${name} = KopTrajectory(\n    [\n${rows.join('\n')}\n    ]\n)`;
+}
+
+function calibrationFile(project: Project): string {
+  const r = project.robot;
+  const encoders = effectiveEncoder(r) !== 'none';
+  const { drive, turn } = testTrajectories(project);
+  const halfTurn = (r.trackWidth / 2) * 2 * Math.PI;
+  const driveReport = encoders
+    ? `f"drive 2 m: the encoders measured left {left:.3f} m, right {right:.3f} m. If the robot really went d "
+                f"metres, set the wheel diameter to {c.WHEEL_DIAMETER:.4f} * d / 2 m in the planner."`
+    : `f"drive 2 m (open loop). If the robot really went d metres, set kV to {c.KV:.3f} * 2 / d in the planner."`;
+  const turnReport = encoders
+    ? `f"turn 360: the encoders measured left {left:.3f} m, right {right:.3f} m (planned ${float(-halfTurn, 3)} / "
+                f"${float(halfTurn, 3)} m). If the robot really turned t degrees, set the track width to "
+                f"{c.TRACK_WIDTH:.4f} * 360 / t m in the planner."`
+    : `f"turn 360 (open loop). If the robot really turned t degrees, set the track width to "
+                f"{c.TRACK_WIDTH:.4f} * 360 / t m in the planner."`;
+  return `"""Calibration autos for the real robot.
+
+Run them in autonomous on carpet with room around the robot, then read the result in the Driver
+Station console (also on the dashboard as KOP/Test result).
+
+- Test: drive 2 m drives straight ahead. Measure how far the robot really went.
+- Test: turn 360° turns one full circle to the left. Put a strip of tape along a bumper first and
+  estimate how far the robot really turned.${
+    encoders
+      ? `
+- Test: measure feedforward slowly ramps the voltage, about 1.5 m forwards and back again, and fits
+  kS and kV to the measured speeds.`
+      : ''
+  }
+"""
+
+import commands2
+import wpilib
+
+from . import constants as c
+from .follow import FollowKopTrajectory
+from .trajectory import KopTrajectory
+
+RAMP_VOLTS_PER_SECOND = 0.75
+RAMP_MAX_VOLTS = 7.0
+RAMP_DISTANCE = 1.5
+RAMP_PAUSE_SECONDS = 1.0
+MIN_SPEED = 0.05
+
+
+def add_to(chooser: wpilib.SendableChooser, drive) -> None:
+    """Adds the tests to an auto chooser."""
+    chooser.addOption("Test: drive 2 m", drive_test(drive))
+    chooser.addOption("Test: turn 360°", turn_test(drive))${
+      encoders ? `
+    chooser.addOption("Test: measure feedforward", MeasureFeedforward(drive))` : ''
+    }
+
+
+def _report(message: str) -> None:
+    wpilib.reportWarning(f"KOP test: {message}")
+    wpilib.SmartDashboard.putString("KOP/Test result", message)
+
+
+def _measured_test(drive, trajectory, name: str, report) -> commands2.Command:
+    start = [0.0, 0.0]
+
+    def begin():
+        start[0] = drive.get_left_distance()
+        start[1] = drive.get_right_distance()
+        drive.reset_pose(0.0, 0.0, 0.0)
+
+    def finish():
+        _report(report(drive.get_left_distance() - start[0], drive.get_right_distance() - start[1]))
+
+    return commands2.SequentialCommandGroup(
+        commands2.InstantCommand(begin),
+        FollowKopTrajectory(drive, trajectory),
+        commands2.WaitCommand(0.5),
+        commands2.InstantCommand(finish),
+    ).withName(name)
+
+
+def drive_test(drive) -> commands2.Command:
+    """Drives ${TEST_DRIVE_METERS} m straight ahead and reports what the encoders measured."""
+
+    def report(left: float, right: float) -> str:
+        return (
+            ${driveReport}
+        )
+
+    return _measured_test(drive, DRIVE, "Test: drive 2 m", report)
+
+
+def turn_test(drive) -> commands2.Command:
+    """Turns one full circle to the left in place and reports what the encoders measured."""
+
+    def report(left: float, right: float) -> str:
+        return (
+            ${turnReport}
+        )
+
+    return _measured_test(drive, TURN, "Test: turn 360°", report)
+${
+  encoders
+    ? `
+
+class _Fit:
+    """Least-squares fit of |volts| = kS + kV * |speed| over samples where the wheel moved as driven."""
+
+    def __init__(self):
+        self.clear()
+
+    def clear(self) -> None:
+        self.count = 0
+        self.wrong_way = 0
+        self.sum_x = self.sum_y = self.sum_xx = self.sum_xy = 0.0
+
+    def add(self, volts: float, speed: float) -> None:
+        if abs(speed) < MIN_SPEED:
+            return
+        if (speed > 0) != (volts > 0):
+            self.wrong_way += 1
+            return
+        x, y = abs(speed), abs(volts)
+        self.count += 1
+        self.sum_x += x
+        self.sum_y += y
+        self.sum_xx += x * x
+        self.sum_xy += x * y
+
+    def kv(self) -> float:
+        d = self.count * self.sum_xx - self.sum_x * self.sum_x
+        return 0.0 if abs(d) < 1e-9 else (self.count * self.sum_xy - self.sum_x * self.sum_y) / d
+
+    def ks(self) -> float:
+        if self.count == 0:
+            return 0.0
+        # The ramp still accelerates the robot (by about ramp / kV): take that kA * a back out.
+        kv = self.kv()
+        acceleration_volts = c.KA * RAMP_VOLTS_PER_SECOND / kv if kv > 0.1 else 0.0
+        return (self.sum_y - kv * self.sum_x) / self.count - acceleration_volts
+
+    def problem(self, side: str):
+        if self.wrong_way > self.count:
+            constant = f"INVERT_{side.upper()}"
+            return (
+                f"the {side} side moved the opposite way to its motors (flip {constant} if the wheels "
+                f"turned backwards, otherwise {constant}_ENCODER)"
+            )
+        if self.count < 10:
+            return f"the {side} side hardly moved or its encoder is not counting"
+        return None
+
+
+class MeasureFeedforward(commands2.Command):
+    """Ramps the voltage slowly and fits kS (volts to get moving) and kV (volts per m/s).
+
+    It drives forwards until a wheel has gone ${float(1.5, 1)} m, then backwards for as long.
+    """
+
+    def __init__(self, drive):
+        super().__init__()
+        self.drive = drive
+        self.timer = wpilib.Timer()
+        self.left = _Fit()
+        self.right = _Fit()
+        self.phase = 0
+        self.phase_start = 0.0
+        self.forward_seconds = 0.0
+        self.left_start = 0.0
+        self.right_start = 0.0
+        self.addRequirements(drive)
+        self.setName("Test: measure feedforward")
+
+    def initialize(self):
+        self.left.clear()
+        self.right.clear()
+        self.phase = 0
+        self.phase_start = 0.0
+        self.left_start = self.drive.get_left_distance()
+        self.right_start = self.drive.get_right_distance()
+        self.timer.restart()
+
+    def execute(self):
+        now = self.timer.get()
+        t = now - self.phase_start
+        travelled = max(
+            abs(self.drive.get_left_distance() - self.left_start),
+            abs(self.drive.get_right_distance() - self.right_start),
+        )
+        volts = 0.0
+        if self.phase == 0:
+            volts = RAMP_VOLTS_PER_SECOND * t
+            if volts > RAMP_MAX_VOLTS or travelled > RAMP_DISTANCE:
+                self.phase = 1
+                self.phase_start = now
+                self.forward_seconds = t
+                volts = 0.0
+        elif self.phase == 1:
+            if t > RAMP_PAUSE_SECONDS:
+                self.phase = 2
+                self.phase_start = now
+        elif self.phase == 2:
+            # Same ramp backwards, for as long, so the robot ends up near where it started.
+            volts = -RAMP_VOLTS_PER_SECOND * t
+            if t > self.forward_seconds:
+                self.phase = 3
+                volts = 0.0
+        self.drive.set_wheel_voltages(volts, volts)
+        if volts != 0.0:
+            self.left.add(volts, self.drive.get_left_velocity())
+            self.right.add(volts, self.drive.get_right_velocity())
+
+    def isFinished(self) -> bool:
+        return self.phase == 3
+
+    def end(self, interrupted: bool):
+        self.drive.stop_drive()
+        if not interrupted:
+            _report(self.summary())
+
+    def summary(self) -> str:
+        problems = [p for p in (self.left.problem("left"), self.right.problem("right")) if p]
+        if problems:
+            return "feedforward: " + "; ".join(problems) + "."
+        left, right = self.left, self.right
+        result = (
+            f"feedforward: kS = {(left.ks() + right.ks()) / 2:.2f} V, kV = {(left.kv() + right.kv()) / 2:.2f} V per m/s "
+            f"(left {left.ks():.2f} / {left.kv():.2f}, right {right.ks():.2f} / {right.kv():.2f}). "
+            "Enter kS and kV on the planner's Robot tab and generate the code again."
+        )
+        ratio = left.kv() / right.kv() if right.kv() else 1.0
+        if ratio > 1.1 or ratio < 1 / 1.1:
+            side = "left" if ratio > 1 else "right"
+            extra = (max(ratio, 1 / ratio) - 1) * 100
+            result += (
+                f" The {side} side needs {extra:.0f}% more voltage for the same speed: check it for friction "
+                "(chain tension, bearings, a weak motor)."
+            )
+        return result`
+    : ''
+}
+
+
+${trajectoryLiteral('DRIVE', drive, 'Test: drive 2 m straight ahead')}
+
+${trajectoryLiteral('TURN', turn, 'Test: one full turn to the left in place')}
+`;
 }
 
 function autosFile(autos: IRAuto[], funcNames: string[]): string {
@@ -648,14 +1126,26 @@ ${allCommands.length ? `Register these named commands first (kop.named_commands.
 import commands2
 import wpilib
 
-from . import auto_data
+from . import auto_data, calibration
 from . import constants as c
 from .follow import FollowKopTrajectory
 from .named_commands import get_command
 
 
-def _follow(drive, mirror, trajectory) -> commands2.Command:
-    return FollowKopTrajectory(drive, trajectory, mirror)
+def _follow(drive, mirror, trajectory, *markers) -> commands2.Command:
+    """Follows a trajectory. Each marker is (seconds, command name).
+
+    A marker starts when the follower's progress reaches its time, so it stays at the right place
+    on the path even when the robot runs slower than planned.
+    """
+    follower = FollowKopTrajectory(drive, trajectory, mirror)
+    if not markers:
+        return follower
+    parallel = [
+        commands2.WaitUntilCommand(lambda t=t: follower.progress >= t).andThen(get_command(name))
+        for t, name in markers
+    ]
+    return commands2.ParallelDeadlineGroup(follower, *parallel)
 
 
 def _start(drive, mirror, x: float, y: float, heading: float) -> commands2.Command:
@@ -677,11 +1167,12 @@ ${autos.map((a, i) => `    ${quote(a.name)}: ${funcNames[i]},`).join('\n')}
 
 
 def build_chooser(drive, mirror=lambda: False) -> wpilib.SendableChooser:
-    """Builds a chooser containing every generated auto (plus "Do Nothing")."""
+    """Builds a chooser with every generated auto, "Do Nothing" (the default) and the calibration tests."""
     chooser = wpilib.SendableChooser()
     chooser.setDefaultOption("Do Nothing", commands2.cmd.none())
     for name, factory in AUTOS.items():
         chooser.addOption(name, factory(drive, mirror))
+    calibration.add_to(chooser, drive)
     return chooser
 `;
 }
@@ -691,8 +1182,7 @@ function autoDataFile(autos: IRAuto[], funcNames: string[]): string {
   autos.forEach((auto, i) => {
     const prefix = funcNames[i].toUpperCase();
     for (const tr of auto.trajectories) {
-      const rows = tr.samples.map((s) => `        (${formatRow(s).join(', ')}),`);
-      blocks.push(`# ${commentSafe(auto.name)}: ${tr.name}\n${prefix}_${tr.name} = KopTrajectory(\n    [\n${rows.join('\n')}\n    ]\n)`);
+      blocks.push(trajectoryLiteral(`${prefix}_${tr.name}`, tr.samples, `${auto.name}: ${tr.name}`));
     }
   });
   return `"""Trajectory samples for the generated autos.
@@ -706,7 +1196,7 @@ ${blocks.join('\n\n')}
 `;
 }
 
-function readmeFile(autos: IRAuto[], funcNames: string[]): string {
+function readmeFile(autos: IRAuto[], funcNames: string[], encoders: boolean): string {
   const commands = [...new Set(autos.flatMap((a) => a.commands))].sort();
   const register = commands.length
     ? commands.map((c) => `        named_commands.register(${quote(c)}, lambda: commands2.PrintCommand(${quote(`TODO: ${c}`)}))`).join('\n')
@@ -728,6 +1218,7 @@ if your drivetrain uses CAN motor controllers from those vendors.
 | \`kop/named_commands.py\` | Registry for the commands used by actions/markers. |
 | \`kop/autos.py\` | The generated autos. |
 | \`kop/auto_data.py\` | Trajectory data for the autos. |
+| \`kop/calibration.py\` | Calibration autos (drive 2 m, turn 360°${encoders ? ', measure feedforward' : ''}). |
 
 ## robot.py example
 
@@ -770,16 +1261,7 @@ ${register}
             self.auto_command.cancel()
 \`\`\`
 
-## Tuning checklist (no gyro)
-
-1. **Directions**: on blocks, drive forward in teleop. Both wheel distances must increase.
-   Fix with \`INVERT_LEFT/RIGHT\` (motors) and \`INVERT_LEFT/RIGHT_ENCODER\`.
-2. **Feedforward**: run WPILib SysId (or a constant-voltage test) to get KS, KV, KA.
-3. **Track width**: spin in place 5-10 turns, measure the wheel distances, and set
-   \`TRACK_WIDTH = (|left| + |right|) / (2 * pi * turns)\` in the planner.
-4. **Feedback**: raise \`KP\` until distance tracks well without oscillating, then \`KP_TURN\` to
-   hold heading. Lower \`KD\` if the motors buzz.
-`;
+${realRobotChecklist('python', encoders)}`;
 }
 
 export function generatePython(project: Project, autos: IRAuto[]): GeneratedFile[] {
@@ -791,8 +1273,9 @@ export function generatePython(project: Project, autos: IRAuto[]): GeneratedFile
     { path: 'kop/follow.py', content: followerFile() },
     { path: 'kop/trajectory.py', content: trajectoryFile() },
     { path: 'kop/named_commands.py', content: namedCommandsFile() },
+    { path: 'kop/calibration.py', content: calibrationFile(project) },
     { path: 'kop/auto_data.py', content: autoDataFile(autos, funcNames) },
     { path: 'kop/__init__.py', content: '"""KOP Path Planner generated autos."""\n' },
-    { path: 'KOP_AUTOS_README.md', content: readmeFile(autos, funcNames) },
+    { path: 'KOP_AUTOS_README.md', content: readmeFile(autos, funcNames, effectiveEncoder(project.robot) !== 'none') },
   ];
 }

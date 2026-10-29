@@ -2,6 +2,7 @@
 
 import { CONTROLLERS, PWM_CLASS, effectiveEncoder, metersPerEncoderUnit } from '../model/hardware';
 import type { Project, RobotConfig } from '../model/types';
+import { FOLLOWER } from '../planner/follower';
 import {
   type GeneratedFile,
   type IRAuto,
@@ -16,8 +17,12 @@ import {
   num,
   pascalCase,
   quote,
+  realRobotChecklist,
+  TEST_DRIVE_METERS,
+  testTrajectories,
   uniqueNames,
 } from './common';
+import type { TrajState } from '../planner/trajectory';
 
 const ROWS_PER_BLOCK = 400;
 
@@ -69,6 +74,8 @@ public final class KopDriveConstants {
   public static final boolean kInvertRight = ${bool(r.invertRight)};
   public static final boolean kBrakeMode = ${bool(r.brakeMode)};
   public static final int kCurrentLimitAmps = ${Math.round(r.currentLimit)};
+  /** Teleop joystick deadband for arcadeDrive. */
+  public static final double kJoystickDeadband = 0.05;
 
   // ---- Encoders ----
   /** False runs the autos open loop (time based) using only feedforward. */
@@ -259,11 +266,14 @@ public final class KopTrajectory {
 }
 
 function followerFile(pkg: string): string {
+  const F = FOLLOWER;
   return `package ${pkg};
 
 import static ${pkg}.KopDriveConstants.*;
 
+import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 import java.util.function.BooleanSupplier;
 
@@ -274,17 +284,50 @@ import java.util.function.BooleanSupplier;
  *
  * <ul>
  *   <li>wheel position/velocity feedback (kP, kD),
- *   <li>heading hold on the difference between the left and right errors (kPTurn),
+ *   <li>heading hold on the difference between the left and right errors (kPTurn, plus an integral
+ *       so a weaker side does not leave a steady heading error),
  *   <li>path correction from encoder-only odometry: when the robot drifts sideways it steers back
- *       towards the path (kLateral).
+ *       towards the path (kLateral),
+ *   <li>a progress clock: when the robot falls behind (heavier or slower than planned, low battery,
+ *       tread scrub on turns) the setpoints slow down and wait for it, so the path keeps its shape,
+ *   <li>a settle phase: the step ends once both wheels are on target and slow, pushing harder on a
+ *       wheel that is stuck short of its target,
+ *   <li>encoder checks: a side that moves the wrong way or does not count stops the closed loop
+ *       (no runaway); the auto finishes open loop and the Driver Station shows the fix.
  * </ul>
  *
  * <p>Without encoders the profile is played back open loop (time based).
  */
 public class FollowKopTrajectory extends Command {
-  private static final double kMaxSteerRadians = 0.35;
-  private static final double kSteerFullSpeed = 0.3;
   private static final double kLoopPeriodSeconds = 0.02;
+  // Progress clock: slows down when a wheel lags its setpoint by kLagSlowMeters, stops at kLagStopMeters.
+  private static final double kLagSlowMeters = ${float(F.lagSlow)};
+  private static final double kLagStopMeters = ${float(F.lagStop)};
+  private static final double kRateDownPerSecond = ${float(F.rateDown)};
+  private static final double kRateUpPerSecond = ${float(F.rateUp)};
+  // A step ends when both wheels are slower than this (m/s) and the heading is within tolerance.
+  private static final double kSettleSpeed = ${float(F.settleSpeed)};
+  private static final double kHeadingToleranceDegrees = ${float(F.headingTolerance)};
+  // Settling: a wheel should approach its target at kApproachGain * error (at most kApproachSpeed);
+  // extra volts build up while it is slower (static friction, scrub) and drain while it is faster.
+  private static final double kApproachGain = ${float(F.approachGain)};
+  private static final double kApproachSpeed = ${float(F.approachSpeed)};
+  private static final double kBoostVoltsPerSecond = ${float(F.boostRate)};
+  private static final double kBoostMaxVolts = ${float(F.boostMax)};
+  // Heading integral (integral time, limit).
+  private static final double kTurnIntegralSeconds = ${float(F.turnIntegralTime)};
+  private static final double kTurnIntegralMaxVolts = ${float(F.turnIntegralMax)};
+  // Path correction.
+  private static final double kMaxSteerRadians = ${float(F.maxSteer)};
+  private static final double kSteerFullSpeed = ${float(F.steerFullSpeed)};
+  // Encoder checks against the setpoints.
+  private static final double kCheckPlannedMeters = ${float(F.checkPlanned)};
+  private static final double kCheckSilentMeters = ${float(F.checkSilent)};
+  private static final double kCheckBackwardsMeters = ${float(F.checkBackwards)};
+  private static final double kSilentSeconds = ${float(F.silentTime)};
+
+  /** Set when an encoder could not be trusted; every later trajectory then runs open loop. */
+  private static String encoderFault;
 
   private final KopDrive drive;
   private final KopTrajectory trajectory;
@@ -296,6 +339,14 @@ public class FollowKopTrajectory extends Command {
   private boolean closedLoop;
   private boolean mirrored;
   private boolean finished;
+  private double progress;
+  private double rate;
+  private double lastTime;
+  private double settleTime;
+  private double silentTime;
+  private double leftBoost;
+  private double rightBoost;
+  private double turnIntegral;
   private double leftStart;
   private double rightStart;
   // Encoder-only odometry in the trajectory's frame.
@@ -320,12 +371,36 @@ public class FollowKopTrajectory extends Command {
     this(drive, trajectory, () -> false);
   }
 
+  /** The encoder problem found during an auto, or null. Cleared when the robot code restarts. */
+  public static String getEncoderFault() {
+    return encoderFault;
+  }
+
+  /** Trusts the encoders again (after fixing the problem without restarting the robot code). */
+  public static void clearEncoderFault() {
+    encoderFault = null;
+    SmartDashboard.putString("KOP/Encoder fault", "");
+  }
+
+  /** Progress along the trajectory in seconds. Markers trigger on this, not on wall time. */
+  public double getProgressSeconds() {
+    return progress;
+  }
+
   @Override
   public void initialize() {
-    closedLoop = kUseEncoders && drive.hasEncoders();
+    closedLoop = kUseEncoders && drive.hasEncoders() && encoderFault == null;
     mirrored = mirror.getAsBoolean();
     finished = false;
     started = false;
+    progress = 0.0;
+    rate = 1.0;
+    lastTime = 0.0;
+    settleTime = 0.0;
+    silentTime = 0.0;
+    leftBoost = 0.0;
+    rightBoost = 0.0;
+    turnIntegral = 0.0;
     leftStart = drive.getLeftDistanceMeters();
     rightStart = drive.getRightDistanceMeters();
     trajectory.sample(0.0, setpoint);
@@ -343,75 +418,124 @@ public class FollowKopTrajectory extends Command {
       timer.restart();
       started = true;
     }
-    double t = timer.get();
+    double now = timer.get();
+    double dt = Math.max(0.0, Math.min(0.1, now - lastTime));
+    lastTime = now;
     double total = trajectory.getTotalTimeSeconds();
-    boolean profileDone = t >= total;
-    trajectory.sample(Math.min(t, total), setpoint);
+    progress = Math.min(total, progress + rate * dt);
+    boolean following = progress < total;
+    trajectory.sample(progress, setpoint);
     // Feedforward targets the middle of the coming loop period.
-    trajectory.sample(Math.min(t + kLoopPeriodSeconds / 2.0, total), feedforwardSetpoint);
+    trajectory.sample(
+        Math.min(total, progress + rate * kLoopPeriodSeconds / 2.0), feedforwardSetpoint);
 
-    // Everything below works in the trajectory's frame; a mirrored path swaps the sides.
     double leftVolts =
-        profileDone
-            ? 0.0
-            : feedforward(feedforwardSetpoint.leftVelocity, feedforwardSetpoint.leftAcceleration);
+        following
+            ? feedforward(feedforwardSetpoint.leftVelocity, feedforwardSetpoint.leftAcceleration)
+            : 0.0;
     double rightVolts =
-        profileDone
-            ? 0.0
-            : feedforward(feedforwardSetpoint.rightVelocity, feedforwardSetpoint.rightAcceleration);
+        following
+            ? feedforward(feedforwardSetpoint.rightVelocity, feedforwardSetpoint.rightAcceleration)
+            : 0.0;
 
-    if (closedLoop) {
-      double left = drive.getLeftDistanceMeters() - leftStart;
-      double right = drive.getRightDistanceMeters() - rightStart;
-      double leftVel = drive.getLeftVelocityMetersPerSecond();
-      double rightVel = drive.getRightVelocityMetersPerSecond();
-      if (mirrored) {
-        double swap = left;
-        left = right;
-        right = swap;
-        swap = leftVel;
-        leftVel = rightVel;
-        rightVel = swap;
+    if (!closedLoop) {
+      if (following) {
+        output(leftVolts, rightVolts);
+      } else {
+        finish();
       }
-      updateOdometry(left, right);
-      double shift = profileDone ? 0.0 : steeringShift();
-      double leftError = setpoint.leftPosition - shift - left;
-      double rightError = setpoint.rightPosition + shift - right;
-      boolean inTolerance =
-          Math.abs(leftError) < kPositionToleranceMeters
-              && Math.abs(rightError) < kPositionToleranceMeters;
-      if (profileDone && (inTolerance || t >= total + kMaxSettleSeconds)) {
-        finished = true;
-        drive.stopDrive();
-        return;
-      }
-      double headingError = (rightError - leftError) / 2.0;
-      leftVolts +=
-          kP * leftError + kD * (setpoint.leftVelocity - leftVel) - kPTurn * headingError;
-      rightVolts +=
-          kP * rightError + kD * (setpoint.rightVelocity - rightVel) + kPTurn * headingError;
-      if (profileDone) {
-        // Settling on the final position: push through static friction.
-        if (Math.abs(leftError) >= kPositionToleranceMeters) {
-          leftVolts += kS * Math.signum(leftError);
-        }
-        if (Math.abs(rightError) >= kPositionToleranceMeters) {
-          rightVolts += kS * Math.signum(rightError);
-        }
-      }
-    } else if (profileDone) {
-      finished = true;
-      drive.stopDrive();
       return;
     }
 
+    // Everything below works in the trajectory's frame; a mirrored path swaps the sides.
+    double left = drive.getLeftDistanceMeters() - leftStart;
+    double right = drive.getRightDistanceMeters() - rightStart;
+    double leftVel = drive.getLeftVelocityMetersPerSecond();
+    double rightVel = drive.getRightVelocityMetersPerSecond();
     if (mirrored) {
-      drive.setWheelVoltages(clamp(rightVolts), clamp(leftVolts));
-      drive.setTargetPose(setpoint.x, kFieldWidthMeters - setpoint.y, -setpoint.heading);
-    } else {
-      drive.setWheelVoltages(clamp(leftVolts), clamp(rightVolts));
-      drive.setTargetPose(setpoint.x, setpoint.y, setpoint.heading);
+      double swap = left;
+      left = right;
+      right = swap;
+      swap = leftVel;
+      leftVel = rightVel;
+      rightVel = swap;
     }
+
+    if (checkEncoders(left, right, dt)) {
+      // No encoders from here on: finish the step open loop.
+      rate = 1.0;
+      if (following) {
+        output(leftVolts, rightVolts);
+      } else {
+        finish();
+      }
+      return;
+    }
+
+    updateOdometry(left, right);
+    double shift = following ? steeringShift() : 0.0;
+    double leftError = setpoint.leftPosition - shift - left;
+    double rightError = setpoint.rightPosition + shift - right;
+
+    if (following) {
+      // Slow the clock while the robot lags behind its setpoints, and stop it when far behind.
+      double behind =
+          Math.max(
+              0.0,
+              Math.max(
+                  lag(setpoint.leftPosition - left, setpoint.leftVelocity),
+                  lag(setpoint.rightPosition - right, setpoint.rightVelocity)));
+      double target =
+          Math.max(
+              0.0,
+              Math.min(1.0, 1.0 - (behind - kLagSlowMeters) / (kLagStopMeters - kLagSlowMeters)));
+      rate =
+          target < rate
+              ? Math.max(target, rate - kRateDownPerSecond * dt)
+              : Math.min(target, rate + kRateUpPerSecond * dt);
+    } else {
+      settleTime += dt;
+      double distanceError = Math.abs(leftError + rightError) / 2.0;
+      double turnError = Math.abs(rightError - leftError) / 2.0;
+      boolean onTarget = distanceError < kPositionToleranceMeters && turnError < turnTolerance();
+      boolean slow = Math.abs(leftVel) < kSettleSpeed && Math.abs(rightVel) < kSettleSpeed;
+      if ((onTarget && slow) || settleTime >= kMaxSettleSeconds) {
+        finish();
+        return;
+      }
+    }
+    if (now > 2.0 * total + 2.0) {
+      // Blocked (e.g. against a wall): give up on this step instead of stalling the auto.
+      DriverStation.reportWarning(
+          "KOP auto: a step could not reach its target in time (robot blocked or too weak for the"
+              + " plan), moving on",
+          false);
+      finish();
+      return;
+    }
+
+    double headingError = (rightError - leftError) / 2.0;
+    if (following) {
+      turnIntegral =
+          Math.max(
+              -kTurnIntegralMaxVolts,
+              Math.min(
+                  kTurnIntegralMaxVolts,
+                  turnIntegral + kPTurn * headingError / kTurnIntegralSeconds * dt));
+    } else {
+      turnIntegral = 0.0;
+    }
+    double turnVolts = kPTurn * headingError + turnIntegral;
+    leftVolts += kP * leftError + kD * (rate * setpoint.leftVelocity - leftVel) - turnVolts;
+    rightVolts += kP * rightError + kD * (rate * setpoint.rightVelocity - rightVel) + turnVolts;
+    if (!following) {
+      // Settling on the final position: push through static friction, harder while a wheel is stuck.
+      leftBoost = boost(leftBoost, leftError, leftVel, dt);
+      rightBoost = boost(rightBoost, rightError, rightVel, dt);
+      leftVolts += kS * Math.signum(leftError) + leftBoost;
+      rightVolts += kS * Math.signum(rightError) + rightBoost;
+    }
+    output(leftVolts, rightVolts);
   }
 
   @Override
@@ -423,6 +547,133 @@ public class FollowKopTrajectory extends Command {
   public void end(boolean interrupted) {
     timer.stop();
     drive.stopDrive();
+  }
+
+  private void finish() {
+    finished = true;
+    drive.stopDrive();
+  }
+
+  /** Limits both sides by the same factor so the robot keeps turning at the planned ratio. */
+  private void output(double leftVolts, double rightVolts) {
+    double peak = Math.max(Math.abs(leftVolts), Math.abs(rightVolts));
+    if (peak > kMaxVoltage) {
+      leftVolts *= kMaxVoltage / peak;
+      rightVolts *= kMaxVoltage / peak;
+    }
+    if (mirrored) {
+      drive.setWheelVoltages(rightVolts, leftVolts);
+      drive.setTargetPose(setpoint.x, kFieldWidthMeters - setpoint.y, -setpoint.heading);
+    } else {
+      drive.setWheelVoltages(leftVolts, rightVolts);
+      drive.setTargetPose(setpoint.x, setpoint.y, setpoint.heading);
+    }
+  }
+
+  /** Wheel error (m) that keeps the heading within kHeadingToleranceDegrees. */
+  private static double turnTolerance() {
+    return kTrackWidthMeters / 2.0 * Math.toRadians(kHeadingToleranceDegrees);
+  }
+
+  /** Distance a wheel is behind its setpoint along its direction of travel (negative when ahead). */
+  private static double lag(double error, double velocity) {
+    return Math.abs(velocity) > 0.02 ? error * Math.signum(velocity) : 0.0;
+  }
+
+  /**
+   * Extra voltage for one wheel while settling (signed). It builds up while the wheel approaches its
+   * target too slowly, drains while it is too fast, and resets once the wheel reaches or passes it.
+   */
+  private static double boost(double current, double error, double velocity, double dt) {
+    if (Math.abs(error) <= turnTolerance() / 2.0 || current * error < 0.0) {
+      return 0.0;
+    }
+    double toward = velocity * Math.signum(error);
+    double wanted = Math.min(kApproachSpeed, kApproachGain * Math.abs(error));
+    double size = Math.abs(current);
+    if (toward < wanted * 0.75) {
+      size = Math.min(kBoostMaxVolts, size + kBoostVoltsPerSecond * dt);
+    } else if (toward > wanted * 1.25) {
+      size = Math.max(0.0, size - kBoostVoltsPerSecond * dt);
+    }
+    return size * Math.signum(error);
+  }
+
+  /**
+   * Compares how far each side has moved with its setpoint. Returns true, and stops using the
+   * encoders, when one cannot be trusted.
+   */
+  private boolean checkEncoders(double left, double right, double dt) {
+    String leftKind =
+        wrongWay(setpoint.leftPosition, setpoint.leftVelocity, left)
+            ? "backwards"
+            : silent(setpoint.leftPosition, left) && tracking(setpoint.rightPosition, right)
+                ? "not counting"
+                : null;
+    String rightKind =
+        wrongWay(setpoint.rightPosition, setpoint.rightVelocity, right)
+            ? "backwards"
+            : silent(setpoint.rightPosition, right) && tracking(setpoint.leftPosition, left)
+                ? "not counting"
+                : null;
+    String message = null;
+    if (leftKind != null || rightKind != null) {
+      // Report the physical side: a mirrored path swapped them.
+      boolean physicalLeft = (leftKind != null) != mirrored;
+      message = faultMessage(physicalLeft, leftKind != null ? leftKind : rightKind);
+    } else {
+      // Both silent while both setpoints moved: wait a moment in case the robot is slow to start.
+      boolean bothSilent =
+          silent(setpoint.leftPosition, left) && silent(setpoint.rightPosition, right);
+      silentTime = bothSilent ? silentTime + dt : 0.0;
+      if (silentTime > kSilentSeconds) {
+        message = "neither encoder is counting. Check their wiring, ports or CAN IDs.";
+      }
+    }
+    if (message == null) {
+      return false;
+    }
+    encoderFault = message;
+    closedLoop = false;
+    DriverStation.reportError("KOP auto: " + message + " Finishing the auto open loop.", false);
+    SmartDashboard.putString("KOP/Encoder fault", message);
+    return true;
+  }
+
+  private static String faultMessage(boolean left, String kind) {
+    String side = left ? "left" : "right";
+    String constant = left ? "kInvertLeft" : "kInvertRight";
+    if (kind.equals("backwards")) {
+      return "the "
+          + side
+          + " side moved the opposite way to its motors. If the "
+          + side
+          + " wheels turned the wrong way, flip "
+          + constant
+          + "; otherwise flip "
+          + constant
+          + "Encoder.";
+    }
+    return "the "
+        + side
+        + " side is not moving or its encoder is not counting. Check the encoder wiring, ports or"
+        + " CAN ID (a thrown chain or tripped breaker looks the same).";
+  }
+
+  // The progress clock waits for a lagging robot, so judge direction by where the setpoint heads.
+  private static boolean wrongWay(double position, double velocity, double measured) {
+    double direction = Math.abs(velocity) > 1e-3 ? Math.signum(velocity) : Math.signum(position);
+    return direction * measured < -kCheckBackwardsMeters;
+  }
+
+  private static boolean silent(double planned, double measured) {
+    return Math.abs(planned) > kCheckPlannedMeters && Math.abs(measured) < kCheckSilentMeters;
+  }
+
+  private static boolean tracking(double planned, double measured) {
+    return Math.abs(planned) > kCheckPlannedMeters
+        && planned * measured > 0.0
+        && Math.abs(measured) > Math.abs(planned) / 2.0;
   }
 
   private void updateOdometry(double left, double right) {
@@ -452,14 +703,12 @@ public class FollowKopTrajectory extends Command {
     return Math.signum(velocity) * speedScale * steer * kTrackWidthMeters / 2.0;
   }
 
-  private static double feedforward(double velocity, double acceleration) {
+  private double feedforward(double velocity, double acceleration) {
     double direction =
-        Math.abs(velocity) > 1e-4 ? Math.signum(velocity) : Math.signum(acceleration);
-    return kS * direction + kV * velocity + kA * acceleration;
-  }
-
-  private static double clamp(double volts) {
-    return Math.max(-kMaxVoltage, Math.min(kMaxVoltage, volts));
+        Math.abs(velocity) > 1e-4
+            ? Math.signum(velocity)
+            : Math.abs(acceleration) > 1e-4 ? Math.signum(acceleration) : 0.0;
+    return kS * direction + kV * rate * velocity + kA * rate * rate * acceleration;
   }
 }
 `;
@@ -510,6 +759,7 @@ function drivetrainFile(pkg: string, robot: RobotConfig): string {
   const info = CONTROLLERS[robot.controller];
   const enc = effectiveEncoder(robot);
   const imports = new Set<string>([
+    'edu.wpi.first.math.MathUtil',
     'edu.wpi.first.math.geometry.Rotation2d',
     'edu.wpi.first.wpilibj.drive.DifferentialDrive',
     'edu.wpi.first.wpilibj.smartdashboard.Field2d',
@@ -720,6 +970,9 @@ function drivetrainFile(pkg: string, robot: RobotConfig): string {
     init.push(
       '    leftEncoder.setDistancePerPulse(kMetersPerEncoderUnit);',
       '    rightEncoder.setDistancePerPulse(kMetersPerEncoderUnit);',
+      '    // Average the rate over a whole encoder cycle (4x decoding) for a steadier speed reading.',
+      '    leftEncoder.setSamplesToAverage(4);',
+      '    rightEncoder.setSamplesToAverage(4);',
     );
     leftDist = 'leftEncoder.getDistance()';
     rightDist = 'rightEncoder.getDistance()';
@@ -758,8 +1011,11 @@ ${importLines.join('\n')}
  *
  * <p>${hardwareDoc}
  *
- * <p>${encoderDoc} Before running autos, check on blocks: driving forward must make both
- * distances increase; flip kInvert* in KopDriveConstants if not.
+ * <p>${encoderDoc} Before running autos, check the directions: with the robot disabled, roll it
+ * forward (or turn the wheels forward on blocks) and watch KOP/Left distance and KOP/Right
+ * distance on the dashboard. Both must
+ * go up; flip kInvert*Encoder in KopDriveConstants if not. Then drive forward in teleop: if a side
+ * spins backwards, flip kInvertLeft/kInvertRight.
  */
 public class KopDrivetrain extends SubsystemBase implements KopDrive {
 ${fields.join('\n')}
@@ -789,7 +1045,11 @@ ${setPercent.join('\n')}
 
   /** Arcade drive for teleop. Rotation is counter-clockwise positive. */
   public void arcadeDrive(double forward, double rotation) {
-    DifferentialDrive.WheelSpeeds speeds = DifferentialDrive.arcadeDriveIK(forward, rotation, true);
+    DifferentialDrive.WheelSpeeds speeds =
+        DifferentialDrive.arcadeDriveIK(
+            MathUtil.applyDeadband(forward, kJoystickDeadband),
+            MathUtil.applyDeadband(rotation, kJoystickDeadband),
+            true);
     tankDrivePercent(speeds.left, speeds.right);
   }
 
@@ -848,6 +1108,11 @@ ${setPercent.join('\n')}
   public void periodic() {
     double left = getLeftDistanceMeters();
     double right = getRightDistanceMeters();
+    // Roll the robot forward by hand: both distances must go up (see KOP_AUTOS_README.md).
+    SmartDashboard.putNumber("KOP/Left distance (m)", left);
+    SmartDashboard.putNumber("KOP/Right distance (m)", right);
+    SmartDashboard.putNumber("KOP/Left speed (m per s)", getLeftVelocityMetersPerSecond());
+    SmartDashboard.putNumber("KOP/Right speed (m per s)", getRightVelocityMetersPerSecond());
     double dLeft = left - lastLeft;
     double dRight = right - lastRight;
     lastLeft = left;
@@ -874,14 +1139,9 @@ function stepExpr(step: IRStep, dataClass: string): string | null {
     case 'turn':
       return `follow(drive, mirror, ${dataClass}.${step.data})`;
     case 'drive': {
-      const follow = `follow(drive, mirror, ${dataClass}.${step.data})`;
-      if (step.markers.length === 0) return follow;
-      const markers = step.markers.map((m) =>
-        m.time < 1e-3
-          ? `KopNamedCommands.get(${quote(m.name)})`
-          : `Commands.waitSeconds(${float(m.time, 3)}).andThen(KopNamedCommands.get(${quote(m.name)}))`,
-      );
-      return `Commands.deadline(\n                ${follow},\n                ${markers.join(',\n                ')})`;
+      if (step.markers.length === 0) return `follow(drive, mirror, ${dataClass}.${step.data})`;
+      const markers = step.markers.map((m) => `marker(${float(m.time, 3)}, ${quote(m.name)})`);
+      return `follow(\n                drive,\n                mirror,\n                ${dataClass}.${step.data},\n                ${markers.join(',\n                ')})`;
     }
   }
 }
@@ -892,11 +1152,331 @@ const JAVA_RESERVED = new Set([
   'if', 'implements', 'import', 'instanceof', 'int', 'interface', 'long', 'native', 'new', 'null', 'package',
   'private', 'protected', 'public', 'return', 'short', 'static', 'strictfp', 'super', 'switch', 'synchronized',
   'this', 'throw', 'throws', 'transient', 'true', 'try', 'void', 'volatile', 'while', 'var', 'record', 'yield',
-  'start', 'follow', 'buildChooser',
+  'start', 'follow', 'marker', 'buildChooser',
 ]);
 
 function javaMethodNames(autos: IRAuto[]): string[] {
   return uniqueNames(autos.map((a) => avoidReserved(camelCase(a.words), JAVA_RESERVED, 'Auto')));
+}
+
+/** A KopTrajectory field parsed from text blocks of sample rows. */
+function trajectoryField(modifiers: string, name: string, samples: TrajState[]): string {
+  const blocks: string[] = [];
+  for (let k = 0; k < samples.length; k += ROWS_PER_BLOCK) {
+    const rows = samples.slice(k, k + ROWS_PER_BLOCK).map((s) => `            ${formatRow(s).join(',')}`);
+    blocks.push(`        """\n${rows.join('\n')}\n            """`);
+  }
+  return `    ${modifiers} KopTrajectory ${name} =\n        KopTrajectory.parse(\n${blocks.join(',\n')});`;
+}
+
+function testsFile(pkg: string, project: Project): string {
+  const r = project.robot;
+  const encoders = effectiveEncoder(r) !== 'none';
+  const { drive, turn } = testTrajectories(project);
+  const halfTurn = (r.trackWidth / 2) * 2 * Math.PI;
+  const driveAdvice = encoders
+    ? `"drive 2 m: the encoders measured left %.3f m, right %.3f m. If the robot really"
+                              + " went d metres, set the wheel diameter to %.4f * d / 2 m in the planner."`
+    : `"drive 2 m (open loop). If the robot really went d metres, set kV to %.3f * 2 / d"
+                              + " in the planner."`;
+  const driveArgs = encoders ? 'left, right, kWheelDiameterMeters' : 'kV';
+  const turnAdvice = encoders
+    ? `"turn 360: the encoders measured left %.3f m, right %.3f m (planned ${float(-halfTurn, 3)} /"
+                              + " ${float(halfTurn, 3)} m). If the robot really turned t degrees, set the"
+                              + " track width to %.4f * 360 / t m in the planner."`
+    : `"turn 360 (open loop). If the robot really turned t degrees, set the track"
+                              + " width to %.4f * 360 / t m in the planner."`;
+  const turnArgs = encoders ? 'left, right, kTrackWidthMeters' : 'kTrackWidthMeters';
+  return `package ${pkg};
+
+import static ${pkg}.KopDriveConstants.*;
+
+import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.Timer;
+import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+import edu.wpi.first.wpilibj2.command.Command;
+import edu.wpi.first.wpilibj2.command.Commands;
+
+/**
+ * Calibration autos for the real robot. Run them in autonomous on carpet with room around the
+ * robot, then read the result in the Driver Station console (also on the dashboard as KOP/Test
+ * result).
+ *
+ * <ul>
+ *   <li><b>Test: drive 2 m</b> drives straight ahead. Measure how far the robot really went.
+ *   <li><b>Test: turn 360</b> turns one full circle to the left. Put a strip of tape along a bumper
+ *       first and estimate how far the robot really turned.${
+    encoders
+      ? `
+ *   <li><b>Test: measure feedforward</b> slowly ramps the voltage, about 1.5 m forwards and back
+ *       again, and fits kS and kV to the measured speeds.`
+      : ''
+  }
+ * </ul>
+ */
+public final class KopCalibration {
+  private static final double kRampVoltsPerSecond = 0.75;
+  private static final double kRampMaxVolts = 7.0;
+  private static final double kRampDistanceMeters = 1.5;
+  private static final double kRampPauseSeconds = 1.0;
+  private static final double kMinSpeed = 0.05;
+
+  private KopCalibration() {}
+
+  /** Adds the tests to an auto chooser. */
+  public static void addTo(SendableChooser<Command> chooser, KopDrive drive) {
+    chooser.addOption("Test: drive 2 m", driveTest(drive));
+    chooser.addOption("Test: turn 360\\u00b0", turnTest(drive));${
+      encoders ? `
+    chooser.addOption("Test: measure feedforward", new MeasureFeedforward(drive));` : ''
+    }
+  }
+
+  /** Drives ${TEST_DRIVE_METERS} m straight ahead and reports what the encoders measured. */
+  public static Command driveTest(KopDrive drive) {
+    double[] start = new double[2];
+    return Commands.sequence(
+            Commands.runOnce(
+                () -> {
+                  start[0] = drive.getLeftDistanceMeters();
+                  start[1] = drive.getRightDistanceMeters();
+                  drive.resetPose(0.0, 0.0, 0.0);
+                }),
+            new FollowKopTrajectory(drive, DRIVE),
+            Commands.waitSeconds(0.5),
+            Commands.runOnce(
+                () -> {
+                  double left = drive.getLeftDistanceMeters() - start[0];
+                  double right = drive.getRightDistanceMeters() - start[1];
+                  report(
+                      String.format(
+                          ${driveAdvice},
+                          ${driveArgs}));
+                }))
+        .withName("Test: drive 2 m");
+  }
+
+  /** Turns one full circle to the left in place and reports what the encoders measured. */
+  public static Command turnTest(KopDrive drive) {
+    double[] start = new double[2];
+    return Commands.sequence(
+            Commands.runOnce(
+                () -> {
+                  start[0] = drive.getLeftDistanceMeters();
+                  start[1] = drive.getRightDistanceMeters();
+                  drive.resetPose(0.0, 0.0, 0.0);
+                }),
+            new FollowKopTrajectory(drive, TURN),
+            Commands.waitSeconds(0.5),
+            Commands.runOnce(
+                () -> {
+                  double left = drive.getLeftDistanceMeters() - start[0];
+                  double right = drive.getRightDistanceMeters() - start[1];
+                  report(
+                      String.format(
+                          ${turnAdvice},
+                          ${turnArgs}));
+                }))
+        .withName("Test: turn 360\\u00b0");
+  }
+
+  private static void report(String message) {
+    DriverStation.reportWarning("KOP test: " + message, false);
+    SmartDashboard.putString("KOP/Test result", message);
+  }
+${
+  encoders
+    ? `
+  /**
+   * Ramps the voltage slowly, forwards until a wheel has driven ${float(1.5, 1)} m and then backwards for
+   * as long, and fits kS (volts to get moving) and kV (volts per m/s) to the measured speeds.
+   */
+  private static final class MeasureFeedforward extends Command {
+    private final KopDrive drive;
+    private final Timer timer = new Timer();
+    private final Fit left = new Fit();
+    private final Fit right = new Fit();
+    private int phase;
+    private double phaseStart;
+    private double forwardSeconds;
+    private double leftStart;
+    private double rightStart;
+
+    MeasureFeedforward(KopDrive drive) {
+      this.drive = drive;
+      addRequirements(drive);
+      setName("Test: measure feedforward");
+    }
+
+    @Override
+    public void initialize() {
+      left.clear();
+      right.clear();
+      phase = 0;
+      phaseStart = 0.0;
+      leftStart = drive.getLeftDistanceMeters();
+      rightStart = drive.getRightDistanceMeters();
+      timer.restart();
+    }
+
+    @Override
+    public void execute() {
+      double now = timer.get();
+      double t = now - phaseStart;
+      double travelled =
+          Math.max(
+              Math.abs(drive.getLeftDistanceMeters() - leftStart),
+              Math.abs(drive.getRightDistanceMeters() - rightStart));
+      double volts = 0.0;
+      if (phase == 0) {
+        volts = kRampVoltsPerSecond * t;
+        if (volts > kRampMaxVolts || travelled > kRampDistanceMeters) {
+          phase = 1;
+          phaseStart = now;
+          forwardSeconds = t;
+          volts = 0.0;
+        }
+      } else if (phase == 1) {
+        if (t > kRampPauseSeconds) {
+          phase = 2;
+          phaseStart = now;
+        }
+      } else if (phase == 2) {
+        // Same ramp backwards, for as long, so the robot ends up near where it started.
+        volts = -kRampVoltsPerSecond * t;
+        if (t > forwardSeconds) {
+          phase = 3;
+          volts = 0.0;
+        }
+      }
+      drive.setWheelVoltages(volts, volts);
+      if (volts != 0.0) {
+        left.add(volts, drive.getLeftVelocityMetersPerSecond());
+        right.add(volts, drive.getRightVelocityMetersPerSecond());
+      }
+    }
+
+    @Override
+    public boolean isFinished() {
+      return phase == 3;
+    }
+
+    @Override
+    public void end(boolean interrupted) {
+      drive.stopDrive();
+      if (!interrupted) {
+        report(summary());
+      }
+    }
+
+    private String summary() {
+      String leftProblem = left.problem("left", "Left");
+      String rightProblem = right.problem("right", "Right");
+      if (leftProblem != null || rightProblem != null) {
+        return "feedforward: "
+            + (leftProblem != null ? leftProblem : "")
+            + (leftProblem != null && rightProblem != null ? "; " : "")
+            + (rightProblem != null ? rightProblem : "")
+            + ".";
+      }
+      String result =
+          String.format(
+              "feedforward: kS = %.2f V, kV = %.2f V per m/s (left %.2f / %.2f, right %.2f /"
+                  + " %.2f). Enter kS and kV on the planner's Robot tab and generate the code again.",
+              (left.kS() + right.kS()) / 2.0,
+              (left.kV() + right.kV()) / 2.0,
+              left.kS(),
+              left.kV(),
+              right.kS(),
+              right.kV());
+      double ratio = left.kV() / right.kV();
+      if (ratio > 1.1 || ratio < 1.0 / 1.1) {
+        result +=
+            String.format(
+                " The %s side needs %.0f%% more voltage for the same speed: check it for friction"
+                    + " (chain tension, bearings, a weak motor).",
+                ratio > 1.0 ? "left" : "right",
+                (Math.max(ratio, 1.0 / ratio) - 1.0) * 100.0);
+      }
+      return result;
+    }
+  }
+
+  /** Least-squares fit of |volts| = kS + kV * |speed| over samples where the wheel moved as driven. */
+  private static final class Fit {
+    private int count;
+    private int wrongWay;
+    private double sumX;
+    private double sumY;
+    private double sumXX;
+    private double sumXY;
+
+    void clear() {
+      count = 0;
+      wrongWay = 0;
+      sumX = 0.0;
+      sumY = 0.0;
+      sumXX = 0.0;
+      sumXY = 0.0;
+    }
+
+    void add(double volts, double speed) {
+      if (Math.abs(speed) < kMinSpeed) {
+        return;
+      }
+      if (Math.signum(speed) != Math.signum(volts)) {
+        wrongWay++;
+        return;
+      }
+      double x = Math.abs(speed);
+      double y = Math.abs(volts);
+      count++;
+      sumX += x;
+      sumY += y;
+      sumXX += x * x;
+      sumXY += x * y;
+    }
+
+    double kV() {
+      double d = count * sumXX - sumX * sumX;
+      return Math.abs(d) < 1e-9 ? 0.0 : (count * sumXY - sumX * sumY) / d;
+    }
+
+    double kS() {
+      if (count == 0) {
+        return 0.0;
+      }
+      // The ramp still accelerates the robot (by about ramp / kV): take that kA * a back out.
+      double kv = kV();
+      double accelerationVolts = kv > 0.1 ? kA * kRampVoltsPerSecond / kv : 0.0;
+      return (sumY - kv * sumX) / count - accelerationVolts;
+    }
+
+    String problem(String side, String constantSide) {
+      if (wrongWay > count) {
+        return "the "
+            + side
+            + " side moved the opposite way to its motors (flip kInvert"
+            + constantSide
+            + " if the wheels turned backwards, otherwise kInvert"
+            + constantSide
+            + "Encoder)";
+      }
+      if (count < 10) {
+        return "the " + side + " side hardly moved or its encoder is not counting";
+      }
+      return null;
+    }
+  }
+`
+    : ''
+}
+${trajectoryField('private static final', 'DRIVE', drive)}
+
+${trajectoryField('private static final', 'TURN', turn)}
+}
+`;
 }
 
 function autosFile(pkg: string, autos: IRAuto[]): string {
@@ -932,14 +1512,7 @@ ${body})
     return ${method}(drive, () -> false);
   }`);
 
-    const trajFields = auto.trajectories.map((tr) => {
-      const blocks: string[] = [];
-      for (let k = 0; k < tr.samples.length; k += ROWS_PER_BLOCK) {
-        const rows = tr.samples.slice(k, k + ROWS_PER_BLOCK).map((s) => `            ${formatRow(s).join(',')}`);
-        blocks.push(`        """\n${rows.join('\n')}\n            """`);
-      }
-      return `    static final KopTrajectory ${tr.name} =\n        KopTrajectory.parse(\n${blocks.join(',\n')});`;
-    });
+    const trajFields = auto.trajectories.map((tr) => trajectoryField('static final', tr.name, tr.samples));
     dataBlocks.push(`  /** Trajectory samples for ${commentSafe(auto.name)}. */
   private static final class ${dataClass} {
 ${trajFields.length ? trajFields.join('\n\n') : '    // This auto has no motion.'}
@@ -963,11 +1536,15 @@ import java.util.function.BooleanSupplier;
 public final class KopAutos {
   private KopAutos() {}
 
-  /** Builds a chooser containing every generated auto (plus "Do Nothing"). */
+  /**
+   * Builds a chooser containing every generated auto, "Do Nothing" (the default) and the
+   * calibration tests from {@link KopCalibration}.
+   */
   public static SendableChooser<Command> buildChooser(KopDrive drive, BooleanSupplier mirror) {
     SendableChooser<Command> chooser = new SendableChooser<>();
     chooser.setDefaultOption("Do Nothing", Commands.none());
 ${chooserLines.join('\n')}
+    KopCalibration.addTo(chooser, drive);
     return chooser;
   }
 
@@ -977,8 +1554,31 @@ ${chooserLines.join('\n')}
 
 ${methods.join('\n\n')}
 
-  private static Command follow(KopDrive drive, BooleanSupplier mirror, KopTrajectory trajectory) {
-    return new FollowKopTrajectory(drive, trajectory, mirror);
+  /** A named command that starts when the robot reaches a point of the path. */
+  private record Marker(double seconds, String name) {}
+
+  private static Marker marker(double seconds, String name) {
+    return new Marker(seconds, name);
+  }
+
+  /**
+   * Follows a trajectory. Markers start when the follower's progress reaches their time, so they
+   * stay at the right place on the path even when the robot runs slower than planned.
+   */
+  private static Command follow(
+      KopDrive drive, BooleanSupplier mirror, KopTrajectory trajectory, Marker... markers) {
+    FollowKopTrajectory follower = new FollowKopTrajectory(drive, trajectory, mirror);
+    if (markers.length == 0) {
+      return follower;
+    }
+    Command[] parallel = new Command[markers.length];
+    for (int i = 0; i < markers.length; i++) {
+      Marker marker = markers[i];
+      parallel[i] =
+          Commands.waitUntil(() -> follower.getProgressSeconds() >= marker.seconds())
+              .andThen(KopNamedCommands.get(marker.name()));
+    }
+    return Commands.deadline(follower, parallel);
   }
 
   private static Command start(
@@ -998,7 +1598,7 @@ ${dataBlocks.join('\n\n')}
 `;
 }
 
-function readmeFile(pkg: string, autos: IRAuto[], methodNames: string[], pwmOnly: boolean): string {
+function readmeFile(pkg: string, autos: IRAuto[], methodNames: string[], pwmOnly: boolean, encoders: boolean): string {
   const commands = [...new Set(autos.flatMap((a) => a.commands))].sort();
   const register = commands.length
     ? commands.map((c) => `    KopNamedCommands.register(${quote(c)}, () -> Commands.print(${quote(`TODO: ${c}`)}));`).join('\n')
@@ -1019,6 +1619,7 @@ Generated by KOP Path Planner. Copy the \`src\` folder into your WPILib robot pr
 | \`FollowKopTrajectory.java\` | Command that follows a trajectory without a gyro. |
 | \`KopNamedCommands.java\` | Registry for the commands used by actions/markers. |
 | \`KopAutos.java\` | The generated autos and their trajectory data. |
+| \`KopCalibration.java\` | Calibration autos (drive 2 m, turn 360°${encoders ? ', measure feedforward' : ''}). |
 
 ## RobotContainer example
 
@@ -1056,18 +1657,7 @@ ${register}
 }
 \`\`\`
 
-## Tuning checklist (no gyro)
-
-1. **Directions**: on blocks, drive forward in teleop. Both wheel distances must increase.
-   Fix with \`kInvertLeft/Right\` (motors) and \`kInvertLeft/RightEncoder\`.
-2. **Feedforward**: run WPILib SysId (or a quick constant-voltage test) to get kS, kV, kA.
-   Even open loop, good feedforward is what makes the robot hit its marks.
-3. **Track width**: spin in place 5-10 turns, measure the wheel distances, and set
-   \`kTrackWidthMeters = (|left| + |right|) / (2 * PI * turns)\` in the planner. On a 6WD
-   drop-center chassis this is usually 5-20% larger than the measured width.
-4. **Feedback**: raise \`kP\` until the robot tracks distance well without oscillating, then raise
-   \`kPTurn\` to hold heading. Lower \`kD\` (velocity feedback) if the motors buzz.
-`;
+${realRobotChecklist('java', encoders)}`;
 }
 
 export function generateJava(project: Project, autos: IRAuto[]): GeneratedFile[] {
@@ -1082,6 +1672,7 @@ export function generateJava(project: Project, autos: IRAuto[]): GeneratedFile[]
     { path: `${dir}/FollowKopTrajectory.java`, content: followerFile(pkg) },
     { path: `${dir}/KopTrajectory.java`, content: trajectoryFile(pkg) },
     { path: `${dir}/KopNamedCommands.java`, content: namedCommandsFile(pkg) },
-    { path: 'KOP_AUTOS_README.md', content: readmeFile(pkg, autos, methodNames, CONTROLLERS[project.robot.controller].family === 'pwm') },
+    { path: `${dir}/KopCalibration.java`, content: testsFile(pkg, project) },
+    { path: 'KOP_AUTOS_README.md', content: readmeFile(pkg, autos, methodNames, CONTROLLERS[project.robot.controller].family === 'pwm', effectiveEncoder(project.robot) !== 'none') },
   ];
 }

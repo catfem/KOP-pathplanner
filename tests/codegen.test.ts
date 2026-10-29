@@ -55,6 +55,11 @@ describe('generateCode', () => {
         const drive = files.find((f) => f.path.endsWith('KopDrivetrain.java'))!.content;
         const usesEncoders = encoder === 'rio' || (encoder === 'integrated' && CONTROLLERS[controller].integratedEncoder);
         expect(drive).toContain(`return ${usesEncoders};`);
+        const calibration = files.find((f) => f.path.endsWith('KopCalibration.java'))!.content;
+        expect(calibration.includes('new MeasureFeedforward(drive)')).toBe(usesEncoders);
+        const autos = files.find((f) => f.path.endsWith('KopAutos.java'))!.content;
+        expect(autos).toMatch(/marker\(\d+\.\d+, "Intake"\)/);
+        expect(autos).toContain('KopCalibration.addTo(chooser, drive);');
         // Balanced braces are a cheap syntax sanity check.
         for (const f of files.filter((x) => x.path.endsWith('.java'))) {
           const code = f.content.replace(/"""[\s\S]*?"""/g, '').replace(/"(?:\\.|[^"\\])*"/g, '');
@@ -71,7 +76,12 @@ describe('generateCode', () => {
     const autos = files.find((f) => f.path === 'kop/autos.py')!.content;
     expect(autos).toContain('def two_piece(drive, mirror=lambda: False)');
     expect(autos).toContain('def drive_and_turn(drive, mirror=lambda: False)');
-    expect(autos).toContain('get_command("Intake")');
+    // Markers trigger on the follower's progress, not on wall time.
+    expect(autos).toMatch(/auto_data\.TWO_PIECE_DRIVE_1,\n\s+\(\d+\.\d+, "Intake"\),/);
+    expect(autos).toContain('follower.progress >= t');
+    expect(autos).toContain('calibration.add_to(chooser, drive)');
+    const calibration = files.find((f) => f.path === 'kop/calibration.py')!.content;
+    expect(calibration).toContain('class MeasureFeedforward(commands2.Command):');
     const data = files.find((f) => f.path === 'kop/auto_data.py')!.content;
     expect(data).toContain('TWO_PIECE_DRIVE_1 = KopTrajectory(');
   });
