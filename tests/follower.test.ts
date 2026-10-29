@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultProject, defaultRobot } from '../src/model/defaults';
+import { defaultProject, defaultRobot, makeWaypoint } from '../src/model/defaults';
 import { KopFollower, faultMessage } from '../src/planner/follower';
 import { PERFECT_SIM, simulatePlan } from '../src/planner/simulate';
 import { buildTurnSamples, planAuto } from '../src/planner/trajectory';
@@ -62,6 +62,59 @@ describe('KopFollower on a real-world robot', () => {
     for (let i = 0; i < 20; i++) out = follower.execute(i === 0 ? 0 : 0.02, { left: 0, right: 0, leftVel: 0, rightVel: 0 });
     expect(Math.max(Math.abs(out.left), Math.abs(out.right))).toBeCloseTo(2, 6);
     expect(out.left).toBeCloseTo(-out.right, 6);
+  });
+});
+
+describe('long fast curves with CAN encoders', () => {
+  // SPARK MAX + NEO built-in encoders arrive a loop late (the simulator models that for
+  // "integrated" encoders). A long sweeping drive used to weave across the path.
+  const neo = {
+    ...robot,
+    trackWidth: 0.6,
+    wheelDiameter: 0.1676,
+    motor: 'NEO' as const,
+    controller: 'can-sparkmax-brushless' as const,
+    encoder: 'integrated' as const,
+    kV: 2.838,
+    kA: 0.525,
+    kD: 0.5,
+    positionTolerance: 0.005,
+  };
+  const sweep = planAuto(
+    {
+      id: 'sweep',
+      name: 'Sweep',
+      waypoints: [
+        makeWaypoint(4.5, 7.2, 20, { stop: true, lenOut: 2.5 }),
+        makeWaypoint(6.3, 1.1, -92, { stop: true, lenIn: 2.5 }),
+      ],
+    },
+    neo,
+  );
+
+  it('does not weave across the path', () => {
+    expect(sweep.steps.filter((st) => st.kind === 'drive')).toHaveLength(1);
+    expect(simulatePlan(sweep, neo, PERFECT_SIM).maxPathDeviation).toBeLessThan(0.03);
+    expect(simulatePlan(sweep, neo, { ...PERFECT_SIM, leftScale: 0.9 }).maxPathDeviation).toBeLessThan(0.05);
+    expect(simulatePlan(sweep, neo, PERFECT_SIM, { latencyLoops: 2 }).maxPathDeviation).toBeLessThan(0.06);
+  });
+
+  it('does not mistake a wheel held by scrub, or backing up on a tight curve, for a broken encoder', () => {
+    const sim = simulatePlan(sweep, neo, realKop, realHardware);
+    expect(sim.fault).toBeNull();
+    expect(sim.maxPathDeviation).toBeLessThan(0.1);
+    // The inner wheel backs up 11 cm before it drives forward, and sticks at the turnaround.
+    for (const lenOut of [0.6, 0.8, 1.0]) {
+      const tight = planAuto(
+        {
+          id: 'tight',
+          name: 'Tight',
+          waypoints: [makeWaypoint(4.5, 7.2, 20, { stop: true, lenOut }), makeWaypoint(6.3, 1.1, -92, { stop: true, lenIn: 2.5 })],
+        },
+        neo,
+      );
+      expect(simulatePlan(tight, neo, realKop, realHardware).fault).toBeNull();
+    }
   });
 });
 

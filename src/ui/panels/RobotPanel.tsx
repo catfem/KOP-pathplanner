@@ -4,6 +4,7 @@ import { CONTROLLERS, DRIVETRAIN_PRESETS, ENCODER_LABELS, effectiveEncoder, moto
 import { showToast, updateProject, useStore } from '../../model/store';
 import type { ControllerType, EncoderType, Language, MotorType, RobotConfig } from '../../model/types';
 import { Checkbox, IntListField, NumberField, Section, SelectField, TextField } from '../components/controls';
+import { CalibrationSection } from './CalibrationSection';
 import { RobotConfigs } from './RobotConfigs';
 
 export function RobotPanel() {
@@ -58,7 +59,7 @@ export function RobotPanel() {
           min={0.2}
           step={0.01}
           onChange={(v) => set('trackWidth', v)}
-          hint="Used for all turning math. Calibrate it with the generated “Test: turn 360°” auto: if the robot turns θ degrees instead of 360, multiply this by 360 / θ. Usually 5–20% more than the measured width on 6WD."
+          hint="Used for all turning math. Calibrate it with the generated “Test: turn 360°” auto and the Calibration section below. Usually 5–20% more than the measured width on 6WD."
         />
         <div className="grid-2">
           <NumberField label="Wheel diameter" unit="in" value={robot.wheelDiameter / INCH} min={1} step={0.25} decimals={2} onChange={(v) => set('wheelDiameter', v * INCH)} />
@@ -76,6 +77,8 @@ export function RobotPanel() {
         <p className="muted small">Theoretical free speed: {free.toFixed(2)} m/s.</p>
         {issue && <p className="warning-inline">{issue}</p>}
       </Section>
+
+      <CalibrationSection />
 
       <Section title="Speed limits">
         <div className="grid-2">

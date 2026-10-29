@@ -178,10 +178,21 @@ TURN_INTEGRAL_MAX_VOLTS = ${float(F.turnIntegralMax)}
 # Path correction.
 MAX_STEER_RADIANS = ${float(F.maxSteer)}
 STEER_FULL_SPEED = ${float(F.steerFullSpeed)}
-# Encoder checks against the setpoints.
+# Above this speed the correction steers less, in proportion, so it closes a sideways error at the same
+# rate at any speed (steering harder at speed weaves once CAN encoder readings lag).
+STEER_REF_SPEED = ${float(F.steerRefSpeed)}
+# Encoder checks. Only volts above KS + FAULT_FRICTION_VOLTS count as a strong push, so a wheel held by
+# static friction or tread scrub is never mistaken for a broken encoder.
+# - Backwards: the encoder moved CHECK_BACKWARDS m against a strong push.
+# - Not counting: the encoder stayed within CHECK_SILENT m while its side got enough push to travel
+#   DEAD_EFFORT m and the other side moved CHECK_PLANNED m.
+# - Neither counting: both setpoints moved CHECK_PLANNED m and both encoders stayed within
+#   CHECK_SILENT m for SILENT_SECONDS.
 CHECK_PLANNED = ${float(F.checkPlanned)}
 CHECK_SILENT = ${float(F.checkSilent)}
 CHECK_BACKWARDS = ${float(F.checkBackwards)}
+FAULT_FRICTION_VOLTS = ${float(F.faultFriction)}
+DEAD_EFFORT = ${float(F.deadEffort)}
 SILENT_SECONDS = ${float(F.silentTime)}
 
 # Set when an encoder could not be trusted; every later trajectory then runs open loop.
@@ -232,18 +243,20 @@ def _boost(current: float, error: float, velocity: float, dt: float) -> float:
     return size * _sign(error)
 
 
-def _wrong_way(position: float, velocity: float, measured: float) -> bool:
-    # The progress clock waits for a lagging robot, so judge direction by where the setpoint heads.
-    direction = _sign(velocity) if abs(velocity) > 1e-3 else _sign(position)
-    return direction * measured < -CHECK_BACKWARDS
+def _against(total: float, moved: float, volts: float, dt: float) -> float:
+    """Adds a wheel's movement against a strong push to total; moving with the push clears it."""
+    if _push(volts, dt) > 0.0 and moved * volts < 0.0:
+        return total + abs(moved)
+    return 0.0 if moved * volts > 0.0 else total
 
 
 def _silent(planned: float, measured: float) -> bool:
     return abs(planned) > CHECK_PLANNED and abs(measured) < CHECK_SILENT
 
 
-def _tracking(planned: float, measured: float) -> bool:
-    return abs(planned) > CHECK_PLANNED and planned * measured > 0.0 and abs(measured) > abs(planned) / 2.0
+def _push(volts: float, dt: float) -> float:
+    """Travel (m) the volts above friction should produce in dt."""
+    return max(0.0, abs(volts) - c.KS - FAULT_FRICTION_VOLTS) * dt / max(0.1, c.KV)
 
 
 def _fault_message(left: bool, kind: str) -> str:
@@ -293,6 +306,21 @@ class FollowKopTrajectory(commands2.Command):
         self.last_time = 0.0
         self.settle_time = 0.0
         self.silent_time = 0.0
+        # Volts applied in the last loop (trajectory frame) and the travel they should have produced.
+        self.last_left_volts = 0.0
+        self.last_right_volts = 0.0
+        self.left_effort = 0.0
+        self.right_effort = 0.0
+        # Distance each wheel has moved against a strong push from its motors (a backwards encoder).
+        self.left_against = 0.0
+        self.right_against = 0.0
+        self.checked_left = 0.0
+        self.checked_right = 0.0
+        # Where each encoder last moved, and the other side's reading at that moment.
+        self.left_anchor = 0.0
+        self.right_anchor = 0.0
+        self.right_at_left_anchor = 0.0
+        self.left_at_right_anchor = 0.0
         self.left_boost = 0.0
         self.right_boost = 0.0
         self.turn_integral = 0.0
@@ -317,6 +345,21 @@ class FollowKopTrajectory(commands2.Command):
         self.last_time = 0.0
         self.settle_time = 0.0
         self.silent_time = 0.0
+        # Volts applied in the last loop (trajectory frame) and the travel they should have produced.
+        self.last_left_volts = 0.0
+        self.last_right_volts = 0.0
+        self.left_effort = 0.0
+        self.right_effort = 0.0
+        # Distance each wheel has moved against a strong push from its motors (a backwards encoder).
+        self.left_against = 0.0
+        self.right_against = 0.0
+        self.checked_left = 0.0
+        self.checked_right = 0.0
+        # Where each encoder last moved, and the other side's reading at that moment.
+        self.left_anchor = 0.0
+        self.right_anchor = 0.0
+        self.right_at_left_anchor = 0.0
+        self.left_at_right_anchor = 0.0
         self.left_boost = 0.0
         self.right_boost = 0.0
         self.turn_integral = 0.0
@@ -432,6 +475,8 @@ class FollowKopTrajectory(commands2.Command):
 
     def _finish(self) -> None:
         self.finished = True
+        self.last_left_volts = 0.0
+        self.last_right_volts = 0.0
         self.drive.stop_drive()
 
     def _output(self, left_volts: float, right_volts: float) -> None:
@@ -440,6 +485,8 @@ class FollowKopTrajectory(commands2.Command):
         if peak > c.MAX_VOLTAGE:
             left_volts *= c.MAX_VOLTAGE / peak
             right_volts *= c.MAX_VOLTAGE / peak
+        self.last_left_volts = left_volts
+        self.last_right_volts = right_volts
         sp = self.sp
         if self.mirrored:
             self.drive.set_wheel_voltages(right_volts, left_volts)
@@ -449,24 +496,37 @@ class FollowKopTrajectory(commands2.Command):
             self.drive.set_target_pose(sp.x, sp.y, sp.heading)
 
     def _check_encoders(self, left: float, right: float, dt: float) -> bool:
-        """Compares how far each side has moved with its setpoint.
+        """Compares how each side's encoder moved with how hard its motors pushed.
 
-        Returns True, and stops using the encoders, when one cannot be trusted.
+        When neither encoder moves it also compares them with the setpoints. Returns True, and stops
+        using the encoders, when one cannot be trusted.
         """
         global _encoder_fault
         sp = self.sp
-        if _wrong_way(sp.left_position, sp.left_velocity, left):
-            left_kind = "backwards"
-        elif _silent(sp.left_position, left) and _tracking(sp.right_position, right):
-            left_kind = "not counting"
-        else:
-            left_kind = None
-        if _wrong_way(sp.right_position, sp.right_velocity, right):
-            right_kind = "backwards"
-        elif _silent(sp.right_position, right) and _tracking(sp.left_position, left):
-            right_kind = "not counting"
-        else:
-            right_kind = None
+        # A wheel reads backwards when its encoder keeps moving against a strong push from its motors:
+        # with the sign wrong, every correction drives it further the wrong way. A wheel held by friction
+        # does not move, and a braking wheel only coasts a little against the push.
+        self.left_against = _against(self.left_against, left - self.checked_left, self.last_left_volts, dt)
+        self.right_against = _against(self.right_against, right - self.checked_right, self.last_right_volts, dt)
+        self.checked_left = left
+        self.checked_right = right
+        # A dead encoder stays put while its side is driven hard and the other side keeps moving. The
+        # effort restarts whenever the encoder moves, so a wheel that pauses (held by friction, or turning
+        # around on a tight curve) does not add up.
+        if abs(left - self.left_anchor) >= CHECK_SILENT:
+            self.left_anchor = left
+            self.left_effort = 0.0
+            self.right_at_left_anchor = right
+        if abs(right - self.right_anchor) >= CHECK_SILENT:
+            self.right_anchor = right
+            self.right_effort = 0.0
+            self.left_at_right_anchor = left
+        self.left_effort += _push(self.last_left_volts, dt)
+        self.right_effort += _push(self.last_right_volts, dt)
+        left_dead = self.left_effort > DEAD_EFFORT and abs(right - self.right_at_left_anchor) > CHECK_PLANNED
+        right_dead = self.right_effort > DEAD_EFFORT and abs(left - self.left_at_right_anchor) > CHECK_PLANNED
+        left_kind = "backwards" if self.left_against > CHECK_BACKWARDS else "not counting" if left_dead else None
+        right_kind = "backwards" if self.right_against > CHECK_BACKWARDS else "not counting" if right_dead else None
         message = None
         if left_kind or right_kind:
             # Report the physical side: a mirrored path swapped them.
@@ -506,7 +566,8 @@ class FollowKopTrajectory(commands2.Command):
         dy = sp.y - self.odom_y
         lateral_error = -math.sin(self.odom_heading) * dx + math.cos(self.odom_heading) * dy
         speed_scale = min(1.0, abs(velocity) / STEER_FULL_SPEED)
-        steer = max(-MAX_STEER_RADIANS, min(MAX_STEER_RADIANS, math.atan(c.K_LATERAL * lateral_error)))
+        gain = c.K_LATERAL * min(1.0, STEER_REF_SPEED / abs(velocity))
+        steer = max(-MAX_STEER_RADIANS, min(MAX_STEER_RADIANS, math.atan(gain * lateral_error)))
         return _sign(velocity) * speed_scale * steer * c.TRACK_WIDTH / 2.0
 
     def _feedforward(self, velocity: float, acceleration: float) -> float:
@@ -857,24 +918,32 @@ function calibrationFile(project: Project): string {
   const encoders = effectiveEncoder(r) !== 'none';
   const { drive, turn } = testTrajectories(project);
   const halfTurn = (r.trackWidth / 2) * 2 * Math.PI;
+  // Both reports name the settings this code was generated with: the planner's Calibration
+  // section must start from those.
   const driveReport = encoders
-    ? `f"drive 2 m: the encoders measured left {left:.3f} m, right {right:.3f} m. If the robot really went d "
-                f"metres, set the wheel diameter to {c.WHEEL_DIAMETER:.4f} * d / 2 m in the planner."`
-    : `f"drive 2 m (open loop). If the robot really went d metres, set kV to {c.KV:.3f} * 2 / d in the planner."`;
+    ? `f"drive 2 m: the encoders measured left {left:.3f} m, right {right:.3f} m. Measure how far the robot "
+                "really went and enter it on the planner's Robot tab, under Calibration "
+                f"(this code: wheel diameter {c.WHEEL_DIAMETER:.4f} m)."`
+    : `"drive 2 m (open loop). Measure how far the robot really went and enter it on the planner's "
+                f"Robot tab, under Calibration (this code: kV {c.KV:.3f})."`;
   const turnReport = encoders
-    ? `f"turn 360: the encoders measured left {left:.3f} m, right {right:.3f} m (planned ${float(-halfTurn, 3)} / "
-                f"${float(halfTurn, 3)} m). If the robot really turned t degrees, set the track width to "
-                f"{c.TRACK_WIDTH:.4f} * 360 / t m in the planner."`
-    : `f"turn 360 (open loop). If the robot really turned t degrees, set the track width to "
-                f"{c.TRACK_WIDTH:.4f} * 360 / t m in the planner."`;
+    ? `f"turn 360: the robot turned left (counter-clockwise); the encoders measured left {left:.3f} m, "
+                f"right {right:.3f} m (planned ${float(-halfTurn, 3)} / ${float(halfTurn, 3)} m). Check whether the front stopped short "
+                "of the start line or went past it, and by how many degrees, and enter that on the planner's "
+                f"Robot tab, under Calibration (this code: track width {c.TRACK_WIDTH:.4f} m)."`
+    : `"turn 360 (open loop): the robot turned left (counter-clockwise). Check whether the front stopped "
+                "short of the start line or went past it, and by how many degrees, and enter that on the "
+                f"planner's Robot tab, under Calibration (this code: track width {c.TRACK_WIDTH:.4f} m)."`;
   return `"""Calibration autos for the real robot.
 
 Run them in autonomous on carpet with room around the robot, then read the result in the Driver
-Station console (also on the dashboard as KOP/Test result).
+Station console (also on the dashboard as KOP/Test result) and enter what the robot really did on
+the planner's Robot tab, under Calibration. Run both tests with the same code; the planner corrects
+the two settings together.
 
 - Test: drive 2 m drives straight ahead. Measure how far the robot really went.
-- Test: turn 360° turns one full circle to the left. Put a strip of tape along a bumper first and
-  estimate how far the robot really turned.${
+- Test: turn 360° turns one full circle to the left. Put a strip of tape along a bumper first, then
+  check whether the front stopped short of the start line or went past it.${
     encoders
       ? `
 - Test: measure feedforward slowly ramps the voltage, about 1.5 m forwards and back again, and fits

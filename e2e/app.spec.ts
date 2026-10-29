@@ -273,6 +273,29 @@ test('simulation plays until the simulated robot finishes and shows what the cor
   await expect(page.locator('.sim-compare')).toContainText('Without it, this robot would stray up to');
 });
 
+test('calibration corrects the wheel diameter and track width together, and undo restores them', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Robot' }).click();
+  const wheel = page.getByLabel('Wheel diameter');
+  const track = page.getByLabel('Track width (effective)');
+  await expect(page.getByRole('button', { name: 'Apply calibration' })).toBeDisabled();
+
+  await page.getByLabel('Test: drive 2 m · distance it really drove').fill('2.1');
+  await page.getByRole('radio', { name: 'Stopped short' }).click();
+  await page.getByLabel('Stopped short of the line by').fill('34');
+  const result = page.getByLabel('Corrected settings');
+  await expect(result).toContainText('Wheel diameter');
+  await expect(result).toContainText('6.300 in');
+  await page.getByRole('button', { name: 'Apply calibration' }).click();
+  await expect(wheel).toHaveValue('6.3');
+  // 0.56 m * 360 / 326 * 1.05
+  await expect(track).toHaveValue('0.649');
+  await expect(page.getByRole('button', { name: 'Apply calibration' })).toBeDisabled();
+
+  await page.keyboard.press('Control+z');
+  await expect(wheel).toHaveValue('6');
+  await expect(track).toHaveValue('0.56');
+});
+
 test.describe('phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
   test('has no horizontal overflow', async ({ page }) => {

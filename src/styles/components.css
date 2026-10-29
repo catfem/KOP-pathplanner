@@ -439,6 +439,32 @@ input[type='text'],
   color: var(--good);
 }
 
+.calibration-result {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.calibration-result div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.calibration-result dt {
+  color: var(--text-3);
+}
+
+.calibration-result dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .sim-compare {
   font-size: var(--text-sm);
   color: var(--text-2);
