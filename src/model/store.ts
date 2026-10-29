@@ -2,8 +2,9 @@
 
 import { useSyncExternalStore } from 'react';
 import { DEFAULT_SIM, type SimSettings } from '../planner/simulate';
-import { defaultProject, defaultRobot } from './defaults';
+import { defaultProject, newId } from './defaults';
 import { presetElements } from './field';
+import { type RobotSettings, type SavedRobotConfig, normalizeCodegen, normalizeRobot, normalizeSavedConfigs } from './robotConfigs';
 import type { Auto, FieldConfig, Project, Waypoint } from './types';
 
 export type Tool = 'select' | 'add';
@@ -49,11 +50,14 @@ export interface State {
   future: Project[];
   fieldImage: string | null;
   toast: Toast | null;
+  /** Saved robot configurations (browser storage, not part of the project or undo history). */
+  configs: SavedRobotConfig[];
 }
 
 const PROJECT_KEY = 'kop-pathplanner:project';
 const UI_KEY = 'kop-pathplanner:ui';
 const IMAGE_KEY = 'kop-pathplanner:field-image';
+const CONFIGS_KEY = 'kop-pathplanner:robot-configs';
 const HISTORY_LIMIT = 100;
 
 function safeGet(key: string): string | null {
@@ -88,11 +92,11 @@ export function normalizeProject(raw: unknown): Project {
     : base.autos;
   return {
     version: 1,
-    robot: { ...defaultRobot(), ...(p.robot ?? {}) },
+    robot: normalizeRobot(p.robot),
     field: normalizeField(p.field, base.field),
     autos: autos.length ? autos : base.autos,
     commands: Array.isArray(p.commands) ? p.commands.filter((c) => c && typeof c.name === 'string') : base.commands,
-    codegen: { ...base.codegen, ...(p.codegen ?? {}) },
+    codegen: normalizeCodegen(p.codegen),
   };
 }
 
@@ -135,6 +139,14 @@ export function normalizeSim(raw: unknown): SimSettings {
     }
   }
   return out;
+}
+
+function loadConfigs(): SavedRobotConfig[] {
+  try {
+    return normalizeSavedConfigs(JSON.parse(safeGet(CONFIGS_KEY) ?? '[]'));
+  } catch {
+    return [];
+  }
 }
 
 function loadInitial(): State {
@@ -181,6 +193,7 @@ function loadInitial(): State {
     future: [],
     fieldImage: safeGet(IMAGE_KEY),
     toast: null,
+    configs: loadConfigs(),
   };
 }
 
@@ -223,6 +236,10 @@ if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', flushSave);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') flushSave();
+  });
+  // Saved robot configs are shared by every tab of the app.
+  window.addEventListener('storage', (e) => {
+    if (e.key === CONFIGS_KEY) setState({ ...state, configs: loadConfigs() });
   });
 }
 
@@ -337,6 +354,46 @@ export function replaceProject(project: Project): void {
     ui: { ...state.ui, selectedAutoId: project.autos[0]?.id ?? '', selectedIndex: null, time: 0, playing: false },
   });
   scheduleSave();
+}
+
+function writeConfigs(configs: SavedRobotConfig[]): void {
+  const sorted = [...configs].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  setState({ ...state, configs: sorted });
+  if (!safeSet(CONFIGS_KEY, JSON.stringify(sorted))) {
+    showToast('Could not store the robot configs: browser storage is full or blocked. Download the config as a file instead.', 'error');
+  }
+}
+
+/** The saved config with this name (ignoring case and surrounding spaces), if any. */
+export function findRobotConfig(name: string): SavedRobotConfig | undefined {
+  const key = name.trim().toLowerCase();
+  return state.configs.find((c) => c.name.toLowerCase() === key);
+}
+
+/** Saves robot settings under a name, replacing (and keeping the name of) a saved config with the same name. */
+export function saveRobotConfig(name: string, settings: RobotSettings = state.project): SavedRobotConfig {
+  const existing = findRobotConfig(name);
+  const config: SavedRobotConfig = {
+    id: existing?.id ?? newId('config'),
+    name: existing?.name ?? name.trim(),
+    savedAt: new Date().toISOString(),
+    robot: structuredClone(settings.robot),
+    codegen: structuredClone(settings.codegen),
+  };
+  writeConfigs([...state.configs.filter((c) => c.id !== config.id), config]);
+  return config;
+}
+
+export function deleteRobotConfig(id: string): void {
+  writeConfigs(state.configs.filter((c) => c.id !== id));
+}
+
+/** Puts robot settings into the project (one undo step). */
+export function applyRobotSettings(settings: RobotSettings): void {
+  updateProject((p) => {
+    p.robot = structuredClone(settings.robot);
+    p.codegen = structuredClone(settings.codegen);
+  });
 }
 
 export function setFieldImage(dataUrl: string | null): boolean {

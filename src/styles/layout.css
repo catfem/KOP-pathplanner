@@ -217,6 +217,54 @@
   white-space: nowrap;
 }
 
+.config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.config-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.config-list li.active {
+  border-color: transparent;
+  background: var(--accent-soft);
+}
+
+.config-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.config-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.config-meta {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.config-meta strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .command-picker {
   display: flex;
   gap: 6px;

@@ -45,6 +45,11 @@ controller encoders, or no sensors at all.
   presets set motors, controllers, encoders and estimated kV/kA together.
 - Projects autosave in the browser and can be saved/opened as files. PathPlanner `.path` files
   can be imported.
+- **Saved robot configs**: keep the robot settings (drivetrain, IDs, gains, calibration and
+  code options) under a name, such as *Comp bot* and *Practice bot*, and load them into any
+  project. Configs live in the browser and download as `.robot.json` files to move to another
+  laptop or share with the team (Robot tab, or Project → Save / Load robot config file). A
+  project file can be loaded as a robot config too.
 - **Calm, low-glare interface**: flat surfaces, no glows or gradients, muted field colors and a
   soft dark mode (follows the system or pick one). Both side panels collapse to give the field
   the whole window, and the speed chart can be hidden.
@@ -70,7 +75,8 @@ npm run dev      # http://localhost:5173
 1. **Robot tab**: pick a drivetrain preset (e.g. *2 NEO / side · SPARK MAX*), then check gear
    ratio, wheel size, motor controller IDs, encoders and gains. The defaults are a stock KOP
    chassis: Toughbox Mini 10.71:1, 6" wheels, 2 CIMs per side, Talon SRX + Victor SPX, E4T
-   encoders on the roboRIO.
+   encoders on the roboRIO. Once it is set up and calibrated, save it under **Saved robot
+   configs** so every new project can load it.
    **Field tab**: the 2026 field with its HUBs, BUMPs and TRENCHes, or your own field image.
 2. **Draw** the path with the **+** tool. Curve mode gives smooth paths; line mode gives
    "drive, stop, turn in place, drive", the most predictable option without a gyro.

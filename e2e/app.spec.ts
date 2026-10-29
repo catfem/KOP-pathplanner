@@ -217,6 +217,50 @@ test('invalid numbers are flagged and do not change the robot', async ({ page })
   await expect(track).toHaveValue('0.56');
 });
 
+test('robot configs: save, load back, keep across reloads, download and load from a file', async ({ page }, testInfo) => {
+  await page.getByRole('tab', { name: 'Robot' }).click();
+  const list = page.getByRole('list', { name: 'Saved robot configs' });
+  const track = page.getByLabel('Track width (effective)');
+  await expect(page.getByText('No saved configs yet.')).toBeVisible();
+
+  await page.getByLabel('Robot config name').fill('Comp bot');
+  await page.getByRole('button', { name: 'Save current' }).click();
+  await expect(list.getByRole('listitem')).toHaveCount(1);
+  await expect(list).toContainText('In use');
+
+  // Change a setting, then load the saved config back.
+  await track.fill('0.62');
+  await track.blur();
+  await expect(list).not.toContainText('In use');
+  await page.getByRole('button', { name: 'Load Comp bot' }).click();
+  await expect(track).toHaveValue('0.56');
+  await expect(list).toContainText('In use');
+
+  await page.reload();
+  await page.getByRole('tab', { name: 'Robot' }).click();
+  await expect(list).toContainText('Comp bot');
+
+  // Download it, delete it, change the robot, and load it back from the file.
+  await page.getByRole('button', { name: 'More actions for Comp bot' }).click();
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('menuitem', { name: 'Download file' }).click()]);
+  expect(download.suggestedFilename()).toBe('comp-bot.robot.json');
+  const file = testInfo.outputPath('comp-bot.robot.json');
+  await download.saveAs(file);
+
+  await page.getByRole('button', { name: 'More actions for Comp bot' }).click();
+  await page.getByRole('menuitem', { name: 'Delete…' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete config' }).click();
+  await expect(page.getByText('No saved configs yet.')).toBeVisible();
+
+  await track.fill('0.7');
+  await track.blur();
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: 'Load from file…' }).click()]);
+  await chooser.setFiles(file);
+  await expect(track).toHaveValue('0.56');
+  await expect(list).toContainText('Comp bot');
+  await expect(list).toContainText('In use');
+});
+
 test.describe('phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
   test('has no horizontal overflow', async ({ page }) => {

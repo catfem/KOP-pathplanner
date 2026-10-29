@@ -4,6 +4,7 @@ import { CONTROLLERS, DRIVETRAIN_PRESETS, ENCODER_LABELS, effectiveEncoder, moto
 import { showToast, updateProject, useStore } from '../../model/store';
 import type { ControllerType, EncoderType, Language, MotorType, RobotConfig } from '../../model/types';
 import { Checkbox, IntListField, NumberField, Section, SelectField, TextField } from '../components/controls';
+import { RobotConfigs } from './RobotConfigs';
 
 export function RobotPanel() {
   const robot = useStore((s) => s.project.robot);
@@ -32,6 +33,8 @@ export function RobotPanel() {
 
   return (
     <div className="panel-scroll">
+      <RobotConfigs />
+
       <Section title="Drivetrain preset">
         <SelectField<string>
           label="Quick setup"

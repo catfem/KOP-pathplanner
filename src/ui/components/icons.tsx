@@ -178,3 +178,8 @@ export const IconChart = () => (
     <path d="M4 19h16M5 15l4-5 4 3 6-7" />
   </Icon>
 );
+export const IconMore = () => (
+  <Icon>
+    <path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth={3} />
+  </Icon>
+);
