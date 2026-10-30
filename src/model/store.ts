@@ -5,7 +5,7 @@ import { DEFAULT_SIM, type SimSettings } from '../planner/simulate';
 import { defaultProject, newId } from './defaults';
 import { MAX_FUEL_PER_SIDE, presetElements, presetFuel } from './field';
 import { type RobotSettings, type SavedRobotConfig, normalizeCodegen, normalizeRobot, normalizeSavedConfigs } from './robotConfigs';
-import type { Auto, FieldConfig, FuelGroup, Project, Waypoint } from './types';
+import type { Action, Auto, FieldConfig, FuelGroup, Project, Waypoint } from './types';
 
 export type Tool = 'select' | 'add';
 export type InspectorTab = 'point' | 'auto' | 'robot' | 'field' | 'sim';
@@ -127,7 +127,8 @@ function normalizeFuel(g: Partial<FuelGroup> | null | undefined, i: number): Fue
   ];
 }
 
-function normalizeWaypoint(w: Partial<Waypoint>, i: number): Waypoint {
+/** A waypoint from a file or storage, with anything missing or of the wrong type reset. */
+export function normalizeWaypoint(w: Partial<Waypoint>, i: number): Waypoint {
   const angle = typeof w.angleOut === 'number' ? w.angleOut : 0;
   return {
     id: typeof w.id === 'string' ? w.id : `wp_${i}_${Math.random().toString(36).slice(2, 7)}`,
@@ -141,10 +142,21 @@ function normalizeWaypoint(w: Partial<Waypoint>, i: number): Waypoint {
     reversed: !!w.reversed,
     facing: typeof w.facing === 'number' ? w.facing : null,
     aimAt: typeof w.aimAt === 'string' ? w.aimAt : null,
-    actions: Array.isArray(w.actions) ? w.actions : [],
+    actions: Array.isArray(w.actions) ? w.actions.flatMap(normalizeAction) : [],
     markers: Array.isArray(w.markers) ? w.markers.filter((m) => typeof m === 'string') : [],
     maxVel: typeof w.maxVel === 'number' ? w.maxVel : null,
   };
+}
+
+function normalizeAction(a: unknown): Action[] {
+  if (!a || typeof a !== 'object') return [];
+  const src = a as Partial<Record<keyof Action | 'name' | 'seconds', unknown>>;
+  const id = typeof src.id === 'string' ? src.id : newId('act');
+  if (src.kind === 'command' && typeof src.name === 'string' && src.name.trim()) return [{ id, kind: 'command', name: src.name }];
+  if (src.kind === 'wait' && typeof src.seconds === 'number' && Number.isFinite(src.seconds) && src.seconds >= 0) {
+    return [{ id, kind: 'wait', seconds: src.seconds }];
+  }
+  return [];
 }
 
 /** Saved simulator settings, with anything that is not a sensible number reset to the default. */

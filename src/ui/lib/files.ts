@@ -10,11 +10,16 @@ export function downloadBlob(filename: string, data: BlobPart, type: string): vo
 }
 
 export function pickFile(accept: string): Promise<File | null> {
+  return pickFiles(accept, false).then((files) => files[0] ?? null);
+}
+
+export function pickFiles(accept: string, multiple = true): Promise<File[]> {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = accept;
-    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.multiple = multiple;
+    input.onchange = () => resolve(Array.from(input.files ?? []));
     input.click();
   });
 }

@@ -53,6 +53,11 @@ controller encoders, or no sensors at all.
   presets set motors, controllers, encoders and estimated kV/kA together.
 - Projects autosave in the browser and can be saved/opened as files. PathPlanner `.path` files
   can be imported.
+- **Auto files**: export one auto (the download button in the autos list, or Project → Export
+  this auto) or all of them as a `.zip`, and import them into any project with Project → Import
+  autos (several files at once, or every auto of a project file). An auto file carries the named
+  commands it uses; clashing names get a number, and a different field size or a missing HUB is
+  pointed out.
 - **Saved robot configs**: keep the robot settings (drivetrain, IDs, gains, calibration and
   code options) under a name, such as *Comp bot* and *Practice bot*, and load them into any
   project. Configs live in the browser and download as `.robot.json` files to move to another

@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises';
 import { type Page, expect, test } from '@playwright/test';
 
 const FIELD = { length: 16.541, width: 8.069 };
@@ -374,6 +375,41 @@ test('FUEL shows faintly on the field, can be hidden, added and removed', async 
   await expect(added).toHaveCount(0);
   await page.keyboard.press('Control+z');
   await expect(page.locator('.element-row', { hasText: 'FUEL 2' })).toContainText('6 FUEL');
+});
+
+test('autos export as files and import into a project', async ({ page }, testInfo) => {
+  const list = page.locator('.auto-list');
+  // Export from the autos list (the active auto shows its buttons).
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    list.getByRole('button', { name: 'Export “Two Piece” as a file' }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe('two-piece.auto.json');
+  const file = testInfo.outputPath('two-piece.auto.json');
+  await download.saveAs(file);
+
+  // All autos at once, from the Project menu.
+  await page.getByRole('button', { name: /Project/ }).click();
+  const [zip] = await Promise.all([page.waitForEvent('download'), page.getByRole('menuitem', { name: 'Export all autos (.zip)' }).click()]);
+  expect(zip.suggestedFilename()).toBe('kop-autos.zip');
+
+  // Import the file back: it arrives as a renamed copy and is selected.
+  await page.getByRole('button', { name: /Project/ }).click();
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('menuitem', { name: 'Import autos…' }).click()]);
+  expect(chooser.isMultiple()).toBe(true);
+  await chooser.setFiles(file);
+  await expect(page.getByText('Imported “Two Piece 2”.')).toBeVisible();
+  await expect(list.locator('li.active .auto-name')).toHaveText('Two Piece 2');
+  await expect(list.locator('li.active .auto-meta')).toHaveText('4 pts');
+
+  // A file without autos is refused with a message.
+  const robotFile = testInfo.outputPath('robot.json');
+  await writeFile(robotFile, JSON.stringify({ kind: 'kop-robot-config', robot: {} }));
+  await page.getByRole('button', { name: /Project/ }).click();
+  const [again] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('menuitem', { name: 'Import autos…' }).click()]);
+  await again.setFiles(robotFile);
+  await expect(page.getByText('robot.json has no autos')).toBeVisible();
+  await expect(list.locator('li')).toHaveCount(3);
 });
 
 test.describe('phone', () => {

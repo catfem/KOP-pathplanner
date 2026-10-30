@@ -5,6 +5,7 @@ import { confirmAction } from '../components/Confirm';
 import { IconButton } from '../components/controls';
 import { IconCode, IconHelp, IconMonitor, IconMoon, IconPanelLeft, IconPanelRight, IconRedo, IconSun, IconUndo } from '../components/icons';
 import { Menu } from '../components/Menu';
+import { exportAllAutos, exportAuto, importAutos } from '../lib/autoFiles';
 import { downloadBlob, pickFile } from '../lib/files';
 import { currentConfig, downloadRobotConfig, importRobotConfigFile } from '../panels/RobotConfigs';
 
@@ -51,8 +52,24 @@ const projectMenu = [
     onSelect: importRobotConfigFile,
   },
   {
-    label: 'Import PathPlanner path…',
+    label: 'Export this auto',
     separatorBefore: true,
+    onSelect: guarded(() => {
+      const { project, ui } = getState();
+      const auto = project.autos.find((a) => a.id === ui.selectedAutoId) ?? project.autos[0];
+      if (auto) exportAuto(auto);
+    }),
+  },
+  {
+    label: 'Export all autos (.zip)',
+    onSelect: guarded(exportAllAutos),
+  },
+  {
+    label: 'Import autos…',
+    onSelect: guarded(importAutos),
+  },
+  {
+    label: 'Import PathPlanner path…',
     onSelect: guarded(async () => {
       const file = await pickFile('.path,.json');
       if (!file) return;

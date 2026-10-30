@@ -4,7 +4,8 @@ import { duplicateAuto, uniqueAutoName } from '../../model/edit';
 import { getState, setUi, updateProject, useStore } from '../../model/store';
 import { confirmAction } from '../components/Confirm';
 import { IconButton, NumberField } from '../components/controls';
-import { IconDuplicate, IconPlus, IconTrash, IconX } from '../components/icons';
+import { IconDownload, IconDuplicate, IconPlus, IconTrash, IconX } from '../components/icons';
+import { exportAuto } from '../lib/autoFiles';
 
 export function Sidebar() {
   const autos = useStore((s) => s.project.autos);
@@ -55,6 +56,7 @@ export function Sidebar() {
               <button
                 type="button"
                 className="auto-item"
+                title={a.name}
                 aria-current={a.id === selectedId}
                 onClick={() => setUi({ selectedAutoId: a.id, selectedIndex: null, time: 0, playing: false })}
                 onDoubleClick={() => setUi({ tab: 'auto' })}
@@ -63,6 +65,9 @@ export function Sidebar() {
                 <span className="auto-meta">{a.waypoints.length} pts</span>
               </button>
               <div className="auto-actions">
+                <IconButton title={`Export “${a.name}” as a file`} onClick={() => exportAuto(a)}>
+                  <IconDownload />
+                </IconButton>
                 <IconButton
                   title="Duplicate"
                   onClick={() => {
