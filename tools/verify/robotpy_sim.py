@@ -10,6 +10,8 @@ calibrate  runs the calibration autos (drive 2 m, turn 360, measure feedforward)
            reports against the plant.
 fault      wires the left encoder backwards and checks that the follower notices, says what to
            flip, and does not run away.
+balance    gives the right wheels 1% more travel per encoder count than the left ones and checks
+           that the drive test curves without the wheel balance and drives straight with it.
 """
 
 import math
@@ -91,6 +93,8 @@ calibration._report = record_report
 
 # Wheel positions and speeds persist from one command to the next, like on a real robot.
 plant = {"lp": 0.0, "lv": 0.0, "rp": 0.0, "rv": 0.0}
+# How far each side's wheels really travel per meter its encoder counts (wheel size).
+wheel_travel = {"left": 1.0, "right": 1.0}
 
 
 def simulate(command, left_encoder=1.0, max_loops=2500):
@@ -112,7 +116,7 @@ def simulate(command, left_encoder=1.0, max_loops=2500):
             lp0, rp0 = lp, rp
             lp, lv = side(lp, lv, l_volts, 0.002)
             rp, rv = side(rp, rv, r_volts, 0.002)
-            dl, dr = lp - lp0, rp - rp0
+            dl, dr = (lp - lp0) * wheel_travel["left"], (rp - rp0) * wheel_travel["right"]
             dh = (dr - dl) / c.TRACK_WIDTH
             x += (dl + dr) / 2 * math.cos(heading + dh / 2)
             y += (dl + dr) / 2 * math.sin(heading + dh / 2)
@@ -188,5 +192,35 @@ if mode == "fault":
         and farthest < 7.0  # the whole auto drives about 5 m per wheel
     )
     finish(ok, f"fault {fault!r}, auto finished in {loop * 0.02:.2f}s, farthest wheel travel {farthest:.2f} m")
+
+if mode == "balance":
+    balance = 0.01
+    wheel_travel.update(left=1.0 - balance / 2.0, right=1.0 + balance / 2.0)
+    drift = {}
+    problems = []
+    for setting in (0.0, balance):
+        # follow.py and calibration.py read these when they run, like a regenerated constants.py.
+        c.LEFT_DISTANCE_SCALE, c.RIGHT_DISTANCE_SCALE = 1.0 - setting / 2.0, 1.0 + setting / 2.0
+        reports.clear()
+        test = calibration.drive_test(drive)
+        x, y, heading, loop, _ = simulate(test, max_loops=3000)
+        drift[setting] = y
+        print(f"     wheel balance {setting:+.3f}: ended {y * 100:+.2f} cm sideways, {math.degrees(heading):+.2f} deg")
+        if drive.has_encoders():
+            numbers = [float(v) for v in re.findall(r"-?\d+\.\d+", reports[0])] if reports else []
+            if len(numbers) < 2 or abs(numbers[0] - 2.0) > 0.05 or abs(numbers[1] - 2.0) > 0.05:
+                problems.append(f"drive test report {reports}")
+    unset, matched = abs(drift[0.0]), abs(drift[balance])
+    if unset < 0.02:
+        problems.append(f"bigger right wheels should curve the robot, but it ended {unset * 100:.2f} cm off")
+    if drive.has_encoders() and matched > 0.005:
+        problems.append(f"with the wheel balance set it still ended {matched * 100:.2f} cm off")
+    if not drive.has_encoders() and matched > unset / 3.0:
+        problems.append(f"open loop the wheel balance only cut the drift from {unset * 100:.2f} to {matched * 100:.2f} cm")
+    finish(
+        not problems,
+        "; ".join(problems)
+        or f"right wheels 1% bigger: {drift[0.0] * 100:+.2f} cm without the wheel balance, {drift[balance] * 100:+.2f} cm with it",
+    )
 
 finish(False, f"unknown mode {mode}")

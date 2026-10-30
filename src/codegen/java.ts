@@ -70,7 +70,9 @@ public final class KopDriveConstants {
    */
   public static final double kWheelBalance = ${float(r.wheelBalance, 5)};
   /**
-   * ${enc === 'none' ? "Each side's voltage is divided by these" : 'Encoder distances are multiplied by these'} to even out the sides.
+   * The autos even out the sides with these: FollowKopTrajectory multiplies each side's encoder
+   * distance and speed by them (without encoders: divides each side's voltage), so this works with
+   * your own KopDrive too.
    */
   public static final double kLeftDistanceScale = 1.0 - kWheelBalance / 2.0;
   public static final double kRightDistanceScale = 1.0 + kWheelBalance / 2.0;
@@ -137,7 +139,10 @@ public interface KopDrive extends Subsystem {
   /** Applies a voltage to each side. Positive values drive the robot forward. */
   void setWheelVoltages(double leftVolts, double rightVolts);
 
-  /** Left wheel distance in meters, positive forward. Any starting value is fine. */
+  /**
+   * Left wheel distance in meters, positive forward. Any starting value is fine. Return the plain
+   * encoder distance: the autos apply kWheelBalance themselves.
+   */
   double getLeftDistanceMeters();
 
   /** Right wheel distance in meters, positive forward. Any starting value is fine. */
@@ -361,6 +366,8 @@ public class FollowKopTrajectory extends Command {
   private final KopTrajectory.State feedforwardSetpoint = new KopTrajectory.State();
   private boolean started;
   private boolean closedLoop;
+  /** No encoders on this drivetrain: the wheel balance is applied to the voltages. */
+  private boolean balanceByVoltage;
   private boolean mirrored;
   private boolean finished;
   private double progress;
@@ -429,6 +436,7 @@ public class FollowKopTrajectory extends Command {
   @Override
   public void initialize() {
     closedLoop = kUseEncoders && drive.hasEncoders() && encoderFault == null;
+    balanceByVoltage = !(kUseEncoders && drive.hasEncoders());
     mirrored = mirror.getAsBoolean();
     finished = false;
     started = false;
@@ -452,8 +460,8 @@ public class FollowKopTrajectory extends Command {
     leftBoost = 0.0;
     rightBoost = 0.0;
     turnIntegral = 0.0;
-    leftStart = drive.getLeftDistanceMeters();
-    rightStart = drive.getRightDistanceMeters();
+    leftStart = kLeftDistanceScale * drive.getLeftDistanceMeters();
+    rightStart = kRightDistanceScale * drive.getRightDistanceMeters();
     trajectory.sample(0.0, setpoint);
     odomX = setpoint.x;
     odomY = setpoint.y;
@@ -498,11 +506,12 @@ public class FollowKopTrajectory extends Command {
       return;
     }
 
-    // Everything below works in the trajectory's frame; a mirrored path swaps the sides.
-    double left = drive.getLeftDistanceMeters() - leftStart;
-    double right = drive.getRightDistanceMeters() - rightStart;
-    double leftVel = drive.getLeftVelocityMetersPerSecond();
-    double rightVel = drive.getRightVelocityMetersPerSecond();
+    // The wheel balance evens out the sides. Everything below works in the trajectory's frame; a
+    // mirrored path swaps the sides.
+    double left = kLeftDistanceScale * drive.getLeftDistanceMeters() - leftStart;
+    double right = kRightDistanceScale * drive.getRightDistanceMeters() - rightStart;
+    double leftVel = kLeftDistanceScale * drive.getLeftVelocityMetersPerSecond();
+    double rightVel = kRightDistanceScale * drive.getRightVelocityMetersPerSecond();
     if (mirrored) {
       double swap = left;
       left = right;
@@ -616,11 +625,17 @@ public class FollowKopTrajectory extends Command {
     }
     lastLeftVolts = leftVolts;
     lastRightVolts = rightVolts;
+    double robotLeft = mirrored ? rightVolts : leftVolts;
+    double robotRight = mirrored ? leftVolts : rightVolts;
+    if (balanceByVoltage) {
+      // No encoders: the wheel balance evens out the sides by voltage.
+      robotLeft /= kLeftDistanceScale;
+      robotRight /= kRightDistanceScale;
+    }
+    drive.setWheelVoltages(robotLeft, robotRight);
     if (mirrored) {
-      drive.setWheelVoltages(rightVolts, leftVolts);
       drive.setTargetPose(setpoint.x, kFieldWidthMeters - setpoint.y, -setpoint.heading);
     } else {
-      drive.setWheelVoltages(leftVolts, rightVolts);
       drive.setTargetPose(setpoint.x, setpoint.y, setpoint.heading);
     }
   }
@@ -1110,7 +1125,7 @@ ${init.join('\n')}
 
   @Override
   public void setWheelVoltages(double leftVolts, double rightVolts) {
-${enc === 'none' ? '    // No encoders: the wheel balance evens out the sides by voltage.\n    leftVolts /= kLeftDistanceScale;\n    rightVolts /= kRightDistanceScale;\n' : ''}${setVolts.join('\n')}
+${setVolts.join('\n')}
   }
 
   /** Open loop percent output per side, -1 to 1. */
@@ -1136,22 +1151,22 @@ ${setPercent.join('\n')}
 
   @Override
   public double getLeftDistanceMeters() {
-    return ${enc === 'none' ? leftDist : `kLeftDistanceScale * ${leftDist}`};
+    return ${leftDist};
   }
 
   @Override
   public double getRightDistanceMeters() {
-    return ${enc === 'none' ? rightDist : `kRightDistanceScale * ${rightDist}`};
+    return ${rightDist};
   }
 
   @Override
   public double getLeftVelocityMetersPerSecond() {
-    return ${enc === 'none' ? leftVel : `kLeftDistanceScale * ${leftVel}`};
+    return ${leftVel};
   }
 
   @Override
   public double getRightVelocityMetersPerSecond() {
-    return ${enc === 'none' ? rightVel : `kRightDistanceScale * ${rightVel}`};
+    return ${rightVel};
   }
 
   @Override
@@ -1325,16 +1340,16 @@ public final class KopCalibration {
     return Commands.sequence(
             Commands.runOnce(
                 () -> {
-                  start[0] = drive.getLeftDistanceMeters();
-                  start[1] = drive.getRightDistanceMeters();
+                  start[0] = leftMeters(drive);
+                  start[1] = rightMeters(drive);
                   drive.resetPose(0.0, 0.0, 0.0);
                 }),
             new FollowKopTrajectory(drive, DRIVE),
             Commands.waitSeconds(0.5),
             Commands.runOnce(
                 () -> {
-                  double left = drive.getLeftDistanceMeters() - start[0];
-                  double right = drive.getRightDistanceMeters() - start[1];
+                  double left = leftMeters(drive) - start[0];
+                  double right = rightMeters(drive) - start[1];
                   report(
                       String.format(
                           ${driveAdvice},
@@ -1349,16 +1364,16 @@ public final class KopCalibration {
     return Commands.sequence(
             Commands.runOnce(
                 () -> {
-                  start[0] = drive.getLeftDistanceMeters();
-                  start[1] = drive.getRightDistanceMeters();
+                  start[0] = leftMeters(drive);
+                  start[1] = rightMeters(drive);
                   drive.resetPose(0.0, 0.0, 0.0);
                 }),
             new FollowKopTrajectory(drive, TURN),
             Commands.waitSeconds(0.5),
             Commands.runOnce(
                 () -> {
-                  double left = drive.getLeftDistanceMeters() - start[0];
-                  double right = drive.getRightDistanceMeters() - start[1];
+                  double left = leftMeters(drive) - start[0];
+                  double right = rightMeters(drive) - start[1];
                   report(
                       String.format(
                           ${turnAdvice},
@@ -1370,6 +1385,23 @@ public final class KopCalibration {
   private static void report(String message) {
     DriverStation.reportWarning("KOP test: " + message, false);
     SmartDashboard.putString("KOP/Test result", message);
+  }
+
+  /** Wheel distances and speeds evened out by the wheel balance, as the follower sees them. */
+  private static double leftMeters(KopDrive drive) {
+    return kLeftDistanceScale * drive.getLeftDistanceMeters();
+  }
+
+  private static double rightMeters(KopDrive drive) {
+    return kRightDistanceScale * drive.getRightDistanceMeters();
+  }
+
+  private static double leftSpeed(KopDrive drive) {
+    return kLeftDistanceScale * drive.getLeftVelocityMetersPerSecond();
+  }
+
+  private static double rightSpeed(KopDrive drive) {
+    return kRightDistanceScale * drive.getRightVelocityMetersPerSecond();
   }
 ${
   encoders
@@ -1401,8 +1433,8 @@ ${
       right.clear();
       phase = 0;
       phaseStart = 0.0;
-      leftStart = drive.getLeftDistanceMeters();
-      rightStart = drive.getRightDistanceMeters();
+      leftStart = leftMeters(drive);
+      rightStart = rightMeters(drive);
       timer.restart();
     }
 
@@ -1412,8 +1444,8 @@ ${
       double t = now - phaseStart;
       double travelled =
           Math.max(
-              Math.abs(drive.getLeftDistanceMeters() - leftStart),
-              Math.abs(drive.getRightDistanceMeters() - rightStart));
+              Math.abs(leftMeters(drive) - leftStart),
+              Math.abs(rightMeters(drive) - rightStart));
       double volts = 0.0;
       if (phase == 0) {
         volts = kRampVoltsPerSecond * t;
@@ -1438,8 +1470,8 @@ ${
       }
       drive.setWheelVoltages(volts, volts);
       if (volts != 0.0) {
-        left.add(volts, drive.getLeftVelocityMetersPerSecond());
-        right.add(volts, drive.getRightVelocityMetersPerSecond());
+        left.add(volts, leftSpeed(drive));
+        right.add(volts, rightSpeed(drive));
       }
     }
 

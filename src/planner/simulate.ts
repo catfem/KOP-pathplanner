@@ -142,7 +142,7 @@ export function simulatePlan(
   let fault: EncoderFault | null = null;
   let timeouts = 0;
 
-  // The plant's wheel positions are what the encoders count. The drivetrain scales them by the
+  // The plant's wheel positions are what the encoders count. The follower scales them by the
   // configured wheel balance; the real wheels travel that far, times the size error on the right.
   const balance = balanceScales(robot.wheelBalance);
   const trueLeft = balance.left;
@@ -203,7 +203,7 @@ export function simulatePlan(
     for (let loop = 0; loop < 5000; loop++) {
       const out = follower.execute(dt, read());
       if (follower.finished) break;
-      // Without encoders the drivetrain applies the wheel balance to the voltages instead.
+      // Without encoders the follower applies the wheel balance to the voltages instead.
       if (closedLoop) integrate(out.left, out.right, CONTROL_DT);
       else integrate(out.left / balance.left, out.right / balance.right, CONTROL_DT);
       dt = CONTROL_DT;
