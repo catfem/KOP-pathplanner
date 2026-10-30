@@ -29,6 +29,7 @@ export function HelpModal() {
             <strong>Edit:</strong> drag points and their handles, double-click the path to insert a point, select a point to make it a stop,
             drive backwards, face a heading or <strong>aim at a HUB</strong>, or run commands (e.g. <em>Shoot</em>) and markers (e.g.{' '}
             <em>Intake</em> while driving). &quot;Bumper against the HUB&quot; moves a shooting spot so the front bumper touches the HUB.
+            Choose the front (head or intake end) on the Robot tab.
           </li>
           <li>
             <strong>Place the robot:</strong> the yellow guides show how far the starting bumpers are from the alliance wall and guardrail, and

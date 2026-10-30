@@ -1,7 +1,7 @@
 // Python (RobotPy commands2) code generator.
 
 import { CONTROLLERS, PWM_CLASS, effectiveEncoder, metersPerEncoderUnit } from '../model/hardware';
-import type { Project, RobotConfig } from '../model/types';
+import type { Project, RobotConfig, RobotFront } from '../model/types';
 import { FOLLOWER } from '../planner/follower';
 import {
   type GeneratedFile,
@@ -66,6 +66,7 @@ GEAR_RATIO = ${float(r.gearRatio, 4)}
 FIELD_WIDTH = ${float(project.field.width, 3)}
 
 # ---- Motor controllers (${CONTROLLERS[r.controller].label}) ----
+# Left and right are seen from behind the robot's front, the ${r.front} end (planner Robot tab).
 LEFT_MOTOR_IDS = ${pyList(r.leftIds)}
 RIGHT_MOTOR_IDS = ${pyList(r.rightIds)}
 INVERT_LEFT = ${pyBool(r.invertLeft)}
@@ -789,10 +790,11 @@ function drivetrainFile(robot: RobotConfig): string {
   return `"""Ready-to-use drivetrain subsystem for the KOP chassis. No gyro is used.
 
 ${hardwareDoc}
-${encoderDoc} Before running autos, check the directions: with the robot disabled, roll it
-forward (or turn the wheels forward on blocks) and watch KOP/Left distance and KOP/Right distance
-on the dashboard. Both must go up; flip INVERT_*_ENCODER in constants.py if not. Then drive
-forward in teleop: if a side spins backwards, flip INVERT_LEFT/INVERT_RIGHT.
+${encoderDoc} Before running autos, check the directions. The front is the ${robot.front} end, and
+left and right are seen from behind it. With the robot disabled, roll it towards its front (or turn
+the wheels that way on blocks) and watch KOP/Left distance and KOP/Right distance on the dashboard.
+Both must go up; flip INVERT_*_ENCODER in constants.py if not. Then drive forward in teleop: the
+${robot.front} end must lead. If a side spins backwards, flip INVERT_LEFT/INVERT_RIGHT.
 
 Any drivetrain can run the generated autos if it provides the same methods:
 set_wheel_voltages, get_left_distance, get_right_distance, get_left_velocity,
@@ -1276,7 +1278,7 @@ ${blocks.join('\n\n')}
 `;
 }
 
-function readmeFile(autos: IRAuto[], funcNames: string[], encoders: boolean): string {
+function readmeFile(autos: IRAuto[], funcNames: string[], encoders: boolean, front: RobotFront): string {
   const commands = [...new Set(autos.flatMap((a) => a.commands))].sort();
   const register = commands.length
     ? commands.map((c) => `        named_commands.register(${quote(c)}, lambda: commands2.PrintCommand(${quote(`TODO: ${c}`)}))`).join('\n')
@@ -1341,7 +1343,7 @@ ${register}
             self.auto_command.cancel()
 \`\`\`
 
-${realRobotChecklist('python', encoders)}`;
+${realRobotChecklist('python', encoders, front)}`;
 }
 
 export function generatePython(project: Project, autos: IRAuto[]): GeneratedFile[] {
@@ -1356,6 +1358,6 @@ export function generatePython(project: Project, autos: IRAuto[]): GeneratedFile
     { path: 'kop/calibration.py', content: calibrationFile(project) },
     { path: 'kop/auto_data.py', content: autoDataFile(autos, funcNames) },
     { path: 'kop/__init__.py', content: '"""KOP Path Planner generated autos."""\n' },
-    { path: 'KOP_AUTOS_README.md', content: readmeFile(autos, funcNames, effectiveEncoder(project.robot) !== 'none') },
+    { path: 'KOP_AUTOS_README.md', content: readmeFile(autos, funcNames, effectiveEncoder(project.robot) !== 'none', project.robot.front) },
   ];
 }

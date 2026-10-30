@@ -22,6 +22,10 @@ controller encoders, or no sensors at all.
   wall and guardrail, and from the front bumper to the aimed HUB, so you can place the robot
   exactly where the plan starts.
 - **Markers**: start commands while driving (e.g. *Intake*) at any point of the path.
+- **Front of the robot**: choose whether the **head** or the **intake** end leads (Robot tab).
+  The front drives first, aims at the HUB and touches it with "bumper against the HUB".
+  Switching swaps the left/right motor IDs, encoder ports, inversions and wheel balance for you,
+  so the generated code drives the other end first without rewiring.
 - **Trajectory planning** for a differential drive: time-optimal velocity profile limited by max
   speed, acceleration, centripetal acceleration, per-wheel speed and per-segment speed limits.
   Includes turn-in-place profiles.
@@ -72,8 +76,9 @@ npm run dev      # http://localhost:5173
 
 ### Workflow
 
-1. **Robot tab**: pick a drivetrain preset (e.g. *2 NEO / side · SPARK MAX*), then check gear
-   ratio, wheel size, motor controller IDs, encoders and gains. The defaults are a stock KOP
+1. **Robot tab**: pick a drivetrain preset (e.g. *2 NEO / side · SPARK MAX*), choose which end
+   is the front (head or intake), then check gear ratio, wheel size, motor controller IDs,
+   encoders and gains. Left and right are always seen from behind the front. The defaults are a stock KOP
    chassis: Toughbox Mini 10.71:1, 6" wheels, 2 CIMs per side, Talon SRX + Victor SPX, E4T
    encoders on the roboRIO. Once it is set up and calibrated, save it under **Saved robot
    configs** so every new project can load it.

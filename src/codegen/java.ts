@@ -1,7 +1,7 @@
 // Java (WPILib command-based) code generator.
 
 import { CONTROLLERS, PWM_CLASS, effectiveEncoder, metersPerEncoderUnit } from '../model/hardware';
-import type { Project, RobotConfig } from '../model/types';
+import type { Project, RobotConfig, RobotFront } from '../model/types';
 import { FOLLOWER } from '../planner/follower';
 import {
   type GeneratedFile,
@@ -80,6 +80,7 @@ public final class KopDriveConstants {
   public static final double kFieldWidthMeters = ${float(project.field.width, 3)};
 
   // ---- Motor controllers (${CONTROLLERS[r.controller].label}) ----
+  /** Left and right are seen from behind the robot's front, the ${r.front} end (planner Robot tab). */
   public static final int[] kLeftMotorIds = ${intArray(r.leftIds)};
   public static final int[] kRightMotorIds = ${intArray(r.rightIds)};
   public static final boolean kInvertLeft = ${bool(r.invertLeft)};
@@ -1085,11 +1086,11 @@ ${importLines.join('\n')}
  *
  * <p>${hardwareDoc}
  *
- * <p>${encoderDoc} Before running autos, check the directions: with the robot disabled, roll it
- * forward (or turn the wheels forward on blocks) and watch KOP/Left distance and KOP/Right
- * distance on the dashboard. Both must
- * go up; flip kInvert*Encoder in KopDriveConstants if not. Then drive forward in teleop: if a side
- * spins backwards, flip kInvertLeft/kInvertRight.
+ * <p>${encoderDoc} Before running autos, check the directions. The front is the ${robot.front} end,
+ * and left and right are seen from behind it. With the robot disabled, roll it towards its front
+ * (or turn the wheels that way on blocks) and watch KOP/Left distance and KOP/Right distance on the
+ * dashboard. Both must go up; flip kInvert*Encoder in KopDriveConstants if not. Then drive forward
+ * in teleop: the ${robot.front} end must lead. If a side spins backwards, flip kInvertLeft/kInvertRight.
  */
 public class KopDrivetrain extends SubsystemBase implements KopDrive {
 ${fields.join('\n')}
@@ -1683,7 +1684,7 @@ ${dataBlocks.join('\n\n')}
 `;
 }
 
-function readmeFile(pkg: string, autos: IRAuto[], methodNames: string[], pwmOnly: boolean, encoders: boolean): string {
+function readmeFile(pkg: string, autos: IRAuto[], methodNames: string[], pwmOnly: boolean, encoders: boolean, front: RobotFront): string {
   const commands = [...new Set(autos.flatMap((a) => a.commands))].sort();
   const register = commands.length
     ? commands.map((c) => `    KopNamedCommands.register(${quote(c)}, () -> Commands.print(${quote(`TODO: ${c}`)}));`).join('\n')
@@ -1742,7 +1743,7 @@ ${register}
 }
 \`\`\`
 
-${realRobotChecklist('java', encoders)}`;
+${realRobotChecklist('java', encoders, front)}`;
 }
 
 export function generateJava(project: Project, autos: IRAuto[]): GeneratedFile[] {
@@ -1758,6 +1759,6 @@ export function generateJava(project: Project, autos: IRAuto[]): GeneratedFile[]
     { path: `${dir}/KopTrajectory.java`, content: trajectoryFile(pkg) },
     { path: `${dir}/KopNamedCommands.java`, content: namedCommandsFile(pkg) },
     { path: `${dir}/KopCalibration.java`, content: testsFile(pkg, project) },
-    { path: 'KOP_AUTOS_README.md', content: readmeFile(pkg, autos, methodNames, CONTROLLERS[project.robot.controller].family === 'pwm', effectiveEncoder(project.robot) !== 'none') },
+    { path: 'KOP_AUTOS_README.md', content: readmeFile(pkg, autos, methodNames, CONTROLLERS[project.robot.controller].family === 'pwm', effectiveEncoder(project.robot) !== 'none', project.robot.front) },
   ];
 }

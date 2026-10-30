@@ -73,7 +73,16 @@ export type ControllerType =
  */
 export type EncoderType = 'none' | 'rio' | 'integrated';
 
+/** The two ends of the robot. 'head' is the end it was first set up to drive towards. */
+export type RobotFront = 'head' | 'intake';
+
 export interface RobotConfig {
+  /**
+   * The robot's front: the end that leads when driving forward, aims at a HUB and touches it.
+   * Left/right, motor IDs, encoder ports and inversions are always seen from behind the front, so
+   * switching ends swaps them (`withFront`).
+   */
+  front: RobotFront;
   /** Bumper-to-bumper length along the direction of travel, m. */
   length: number;
   /** Bumper-to-bumper width, m. */

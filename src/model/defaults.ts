@@ -34,6 +34,7 @@ export const INCH = 0.0254;
 /** Typical AM14U (KOP) long configuration, 6" wheels, Toughbox Mini 10.71:1, 2 CIMs per side. */
 export function defaultRobot(): RobotConfig {
   return {
+    front: 'head',
     length: 0.98,
     width: 0.86,
     trackWidth: 0.56,
