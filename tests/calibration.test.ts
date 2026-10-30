@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TEST_DRIVE_METERS, calibrate } from '../src/model/calibration';
 import { INCH, defaultRobot } from '../src/model/defaults';
+import { MAX_WHEEL_BALANCE } from '../src/model/robotConfigs';
 import type { RobotConfig } from '../src/model/types';
 import { PERFECT_SIM, simulatePlan } from '../src/planner/simulate';
 import { type Plan, buildTurnSamples } from '../src/planner/trajectory';
@@ -122,10 +123,12 @@ describe('calibration from the test autos', () => {
     expect(change[0].to).toBeCloseTo((2 * 0.56 * 0.034) / 4, 3);
     const right = calibrate(config, { drove: 2, turnOffset: 0, sideways: -0.034 }, true).changes[0].to;
     expect(right).toBeCloseTo(-change[0].to, 3);
-    // Much more than tread wear: applied, with a warning to check the setup.
-    expect(calibrate(config, { drove: 2, turnOffset: 0, sideways: 0.6 }, true).warnings.join(' ')).toContain('more than tread wear');
-    // Far more than wheels explain: no change, a warning instead.
-    const silly = calibrate(config, { drove: 2, turnOffset: 0, sideways: 0.9 }, true);
+    // Much more than tread wear (here about 22%): applied, with a warning to check the setup.
+    const big = calibrate(config, { drove: 2, turnOffset: 0, sideways: 0.9 }, true);
+    expect(big.changes[0].to).toBeCloseTo(0.224, 3);
+    expect(big.warnings.join(' ')).toContain('more than tread wear');
+    // More than the largest wheel balance (50%): no change, a warning instead.
+    const silly = calibrate(config, { drove: 2, turnOffset: 0, sideways: 2.5 }, true);
     expect(silly.changes).toEqual([]);
     expect(silly.warnings.join(' ')).toContain('started square');
   });
@@ -149,6 +152,28 @@ describe('calibration from the test autos', () => {
   const relative = (robot: RobotConfig, trueRatio: number) => trueRatio / ((1 + robot.wheelBalance / 2) / (1 - robot.wheelBalance / 2));
 
   for (const encoders of [true, false]) {
+    it(`straightens a robot whose right wheels go 30% farther, over two calibration rounds (${encoders ? 'encoders' : 'open loop'})`, () => {
+      const config = { ...defaultRobot(), encoder: encoders ? ('rio' as const) : ('none' as const) };
+      const trueRatio = 1.3;
+      const run = (robot: RobotConfig) => {
+        const sim = simulatePlan(drivePlan(robot), robot, { ...PERFECT_SIM, wheelSizeScale: relative(robot, trueRatio) });
+        return sim.trace[sim.trace.length - 1];
+      };
+      let robot: RobotConfig = config;
+      const before = run(robot);
+      expect(before.y).toBeGreaterThan(0.5);
+      for (let round = 0; round < 2; round++) {
+        const end = run(robot);
+        robot = apply(robot, calibrate(robot, { drove: TEST_DRIVE_METERS, turnOffset: 0, sideways: end.y }, encoders).changes);
+      }
+      // With encoders about 26%: 1.3 = (1 + b/2) / (1 - b/2). Open loop the balance works through
+      // the voltage, which friction blurs, so it lands lower.
+      expect(robot.wheelBalance).toBeGreaterThan(encoders ? 0.24 : 0.15);
+      expect(robot.wheelBalance).toBeLessThan(MAX_WHEEL_BALANCE);
+      const after = run(robot);
+      expect(Math.abs(after.y)).toBeLessThan(encoders ? 0.01 : before.y / 5);
+    });
+
     it(`straightens the drive on the simulated robot whose right wheels go 1% farther (${encoders ? 'encoders' : 'open loop'})`, () => {
       const config = { ...defaultRobot(), encoder: encoders ? ('rio' as const) : ('none' as const) };
       const trueRatio = 1.01;

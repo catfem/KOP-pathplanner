@@ -308,6 +308,18 @@ test('calibration reads the sideways drift into the wheel balance', async ({ pag
   await expect(page.getByLabel('Wheel balance (right vs left)')).toHaveValue('0.95');
 });
 
+test('the wheel balance goes up to 50% either way', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Robot' }).click();
+  const balance = page.getByLabel('Wheel balance (right vs left)');
+  await balance.fill('-35');
+  await balance.blur();
+  await expect(balance).toHaveValue('-35');
+  await balance.fill('60');
+  await expect(page.locator('.field-error').first()).toContainText('Maximum is 50');
+  await balance.blur();
+  await expect(balance).toHaveValue('50');
+});
+
 test('switching the front to the intake swaps the wiring, and undo restores it', async ({ page }) => {
   await page.getByRole('tab', { name: 'Robot' }).click();
   const left = page.getByLabel('Left CAN IDs');

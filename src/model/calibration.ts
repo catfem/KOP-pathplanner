@@ -105,7 +105,7 @@ export function calibrate(robot: RobotConfig, m: CalibrationMeasurements, encode
     const ratio = (1 + robot.wheelBalance / 2) / (1 - robot.wheelBalance / 2);
     const corrected = ratio * (1 + (2 * trackWidth * sideways) / (drove * drove));
     const balance = (2 * (corrected - 1)) / (corrected + 1);
-    if (Math.abs(balance) > MAX_WHEEL_BALANCE) {
+    if (!Number.isFinite(balance) || Math.abs(balance) > MAX_WHEEL_BALANCE) {
       warnings.push(
         `${(Math.abs(sideways) * 100).toFixed(0)} cm sideways over ${drove.toFixed(1)} m is more than different wheels explain. Check that the robot started square to the line, and look for a dragging wheel, a loose chain or a slipping tread.`,
       );

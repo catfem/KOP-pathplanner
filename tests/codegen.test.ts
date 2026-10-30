@@ -67,7 +67,7 @@ describe('generateCode', () => {
         expect(follower).toContain('kLeftDistanceScale * drive.getLeftDistanceMeters()');
         expect(follower).toContain('kRightDistanceScale * drive.getRightVelocityMetersPerSecond()');
         expect(follower).toContain('balanceByVoltage = !(kUseEncoders && drive.hasEncoders());');
-        expect(follower).toContain('robotLeft /= kLeftDistanceScale;');
+        expect(follower).toContain('leftVolts /= mirrored ? kRightDistanceScale : kLeftDistanceScale;');
         expect(calibration).toContain('kLeftDistanceScale * drive.getLeftDistanceMeters()');
         // Balanced braces are a cheap syntax sanity check.
         for (const f of files.filter((x) => x.path.endsWith('.java'))) {

@@ -97,7 +97,7 @@ export function RobotPanel() {
           step={0.1}
           decimals={2}
           onChange={(v) => set('wheelBalance', v / 100)}
-          hint="How much farther the right wheels travel than the left ones per turn. Set it from the sideways drift of “Test: drive 2 m” under Calibration."
+          hint={`How much farther the right wheels travel than the left ones per turn, up to ±${MAX_WHEEL_BALANCE * 100}%. Set it from the sideways drift of “Test: drive 2 m” under Calibration.`}
         />
         <div className="grid-2">
           <SelectField<MotorType>

@@ -197,15 +197,14 @@ export function simulatePlan(
       }
       continue;
     }
-    const follower = new KopFollower(st.samples, robot, encodersWork);
+    // Without encoders the follower applies the wheel balance to the voltages instead.
+    const follower = new KopFollower(st.samples, robot, encodersWork, false, closedLoop ? null : balance);
     follower.initialize(read());
     let dt = 0;
     for (let loop = 0; loop < 5000; loop++) {
       const out = follower.execute(dt, read());
       if (follower.finished) break;
-      // Without encoders the follower applies the wheel balance to the voltages instead.
-      if (closedLoop) integrate(out.left, out.right, CONTROL_DT);
-      else integrate(out.left / balance.left, out.right / balance.right, CONTROL_DT);
+      integrate(out.left, out.right, CONTROL_DT);
       dt = CONTROL_DT;
     }
     if (follower.fault) {
