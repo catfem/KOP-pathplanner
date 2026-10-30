@@ -1,5 +1,5 @@
 # KOP Path Planner
-
+Author : 8806 OLPDL
 A web app that plans, simulates and **generates autonomous code** for the FRC Kit-of-Parts
 chassis (AM14U-style tank / west coast drive). It works like PathPlanner, but it is built for a
 plain KOP drivetrain and **does not need a gyroscope**. It runs with roboRIO encoders, motor
