@@ -94,7 +94,7 @@ export function CalibrationSection() {
           unit="cm"
           value={sideCm}
           min={0}
-          max={100}
+          max={300}
           step={0.5}
           decimals={1}
           onChange={setSideCm}

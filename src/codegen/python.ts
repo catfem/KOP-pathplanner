@@ -493,7 +493,12 @@ class FollowKopTrajectory(commands2.Command):
         self.drive.stop_drive()
 
     def _output(self, left_volts: float, right_volts: float) -> None:
-        """Limits both sides by the same factor so the robot keeps turning at the planned ratio."""
+        """Without encoders, evens out the sides by the wheel balance. Then limits both sides by the
+        same factor so the robot keeps turning at the planned ratio."""
+        if self.balance_by_voltage:
+            # A mirrored path drives the robot's right side with the trajectory's left.
+            left_volts /= c.RIGHT_DISTANCE_SCALE if self.mirrored else c.LEFT_DISTANCE_SCALE
+            right_volts /= c.LEFT_DISTANCE_SCALE if self.mirrored else c.RIGHT_DISTANCE_SCALE
         peak = max(abs(left_volts), abs(right_volts))
         if peak > c.MAX_VOLTAGE:
             left_volts *= c.MAX_VOLTAGE / peak
@@ -501,15 +506,11 @@ class FollowKopTrajectory(commands2.Command):
         self.last_left_volts = left_volts
         self.last_right_volts = right_volts
         sp = self.sp
-        robot_left, robot_right = (right_volts, left_volts) if self.mirrored else (left_volts, right_volts)
-        if self.balance_by_voltage:
-            # No encoders: the wheel balance evens out the sides by voltage.
-            robot_left /= c.LEFT_DISTANCE_SCALE
-            robot_right /= c.RIGHT_DISTANCE_SCALE
-        self.drive.set_wheel_voltages(robot_left, robot_right)
         if self.mirrored:
+            self.drive.set_wheel_voltages(right_volts, left_volts)
             self.drive.set_target_pose(sp.x, c.FIELD_WIDTH - sp.y, -sp.heading)
         else:
+            self.drive.set_wheel_voltages(left_volts, right_volts)
             self.drive.set_target_pose(sp.x, sp.y, sp.heading)
 
     def _check_encoders(self, left: float, right: float, dt: float) -> bool:

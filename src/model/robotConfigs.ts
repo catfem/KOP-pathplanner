@@ -44,8 +44,12 @@ const POSITIVE: (keyof RobotConfig)[] = [
   'encoderCPR',
 ];
 
-/** Largest left/right wheel balance accepted, as a fraction. */
-export const MAX_WHEEL_BALANCE = 0.2;
+/**
+ * Largest left/right wheel balance accepted, as a fraction: one side's wheels travel up to 1.67x
+ * as far as the other's per count. Worn wheels need a few percent; more than that also covers
+ * mismatched gearboxes or wheels.
+ */
+export const MAX_WHEEL_BALANCE = 0.5;
 
 function isIdList(v: unknown, length?: number): v is number[] {
   return (
@@ -66,7 +70,7 @@ export function normalizeRobot(raw: unknown): RobotConfig {
     const v = src[key];
     const fallback = out[key];
     if (key === 'wheelBalance') {
-      // The one signed setting: a few percent either way.
+      // The one signed setting: up to MAX_WHEEL_BALANCE either way.
       if (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= MAX_WHEEL_BALANCE) target[key] = v;
     } else if (typeof fallback === 'number') {
       if (typeof v === 'number' && Number.isFinite(v) && (POSITIVE.includes(key) ? v > 0 : v >= 0)) target[key] = v;

@@ -155,6 +155,8 @@ export class KopFollower {
     private readonly g: FollowerGains,
     closedLoop: boolean,
     private readonly mirrored = false,
+    /** Drivetrains without encoders: each side's voltage is divided by these (the wheel balance). */
+    private readonly voltageBalance: { left: number; right: number } | null = null,
   ) {
     this.closedLoop = closedLoop;
     this.total = samples[samples.length - 1].t;
@@ -282,8 +284,17 @@ export class KopFollower {
     return g.kS * direction + g.kV * this.rate * velocity + g.kA * this.rate * this.rate * acceleration;
   }
 
-  /** Limits both sides by the same factor so the robot keeps turning at the planned ratio. */
+  /**
+   * Without encoders, evens out the sides by the wheel balance. Then limits both sides by the same
+   * factor so the robot keeps turning at the planned ratio.
+   */
   private output(leftVolts: number, rightVolts: number): { left: number; right: number } {
+    const balance = this.voltageBalance;
+    if (balance) {
+      // A mirrored path drives the robot's right side with the trajectory's left.
+      leftVolts /= this.mirrored ? balance.right : balance.left;
+      rightVolts /= this.mirrored ? balance.left : balance.right;
+    }
     const peak = Math.max(Math.abs(leftVolts), Math.abs(rightVolts));
     if (peak > this.g.maxVoltage) {
       leftVolts *= this.g.maxVoltage / peak;

@@ -616,8 +616,16 @@ public class FollowKopTrajectory extends Command {
     drive.stopDrive();
   }
 
-  /** Limits both sides by the same factor so the robot keeps turning at the planned ratio. */
+  /**
+   * Without encoders, evens out the sides by the wheel balance. Then limits both sides by the same
+   * factor so the robot keeps turning at the planned ratio.
+   */
   private void output(double leftVolts, double rightVolts) {
+    if (balanceByVoltage) {
+      // A mirrored path drives the robot's right side with the trajectory's left.
+      leftVolts /= mirrored ? kRightDistanceScale : kLeftDistanceScale;
+      rightVolts /= mirrored ? kLeftDistanceScale : kRightDistanceScale;
+    }
     double peak = Math.max(Math.abs(leftVolts), Math.abs(rightVolts));
     if (peak > kMaxVoltage) {
       leftVolts *= kMaxVoltage / peak;
@@ -625,17 +633,11 @@ public class FollowKopTrajectory extends Command {
     }
     lastLeftVolts = leftVolts;
     lastRightVolts = rightVolts;
-    double robotLeft = mirrored ? rightVolts : leftVolts;
-    double robotRight = mirrored ? leftVolts : rightVolts;
-    if (balanceByVoltage) {
-      // No encoders: the wheel balance evens out the sides by voltage.
-      robotLeft /= kLeftDistanceScale;
-      robotRight /= kRightDistanceScale;
-    }
-    drive.setWheelVoltages(robotLeft, robotRight);
     if (mirrored) {
+      drive.setWheelVoltages(rightVolts, leftVolts);
       drive.setTargetPose(setpoint.x, kFieldWidthMeters - setpoint.y, -setpoint.heading);
     } else {
+      drive.setWheelVoltages(leftVolts, rightVolts);
       drive.setTargetPose(setpoint.x, setpoint.y, setpoint.heading);
     }
   }

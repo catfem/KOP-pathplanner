@@ -63,6 +63,26 @@ describe('KopFollower on a real-world robot', () => {
     expect(Math.max(Math.abs(out.left), Math.abs(out.right))).toBeCloseTo(2, 6);
     expect(out.left).toBeCloseTo(-out.right, 6);
   });
+
+  it('applies a big wheel balance without encoders and still stays within max voltage', () => {
+    const { samples } = buildTurnSamples({ x: 0, y: 0 }, 0, Math.PI, robot, 0.02);
+    const balance = { left: 0.75, right: 1.25 };
+    for (const mirrored of [false, true]) {
+      const follower = new KopFollower(samples, { ...robot, maxVoltage: 2 }, false, mirrored, balance);
+      follower.initialize({ left: 0, right: 0, leftVel: 0, rightVel: 0 });
+      let peak = 0;
+      let out = { left: 0, right: 0 };
+      for (let i = 0; i < samples.length; i++) {
+        out = follower.execute(i === 0 ? 0 : 0.02, { left: 0, right: 0, leftVel: 0, rightVel: 0 });
+        peak = Math.max(peak, Math.abs(out.left), Math.abs(out.right));
+        if (Math.abs(out.left) > 0.5) {
+          // The robot's left side gets 1.25 / 0.75 times the voltage of its right side.
+          expect(Math.abs(out.left / out.right)).toBeCloseTo(balance.right / balance.left, 6);
+        }
+      }
+      expect(peak).toBeCloseTo(2, 6);
+    }
+  });
 });
 
 describe('long fast curves with CAN encoders', () => {
