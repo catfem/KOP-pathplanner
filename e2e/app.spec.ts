@@ -339,6 +339,43 @@ test('switching the front to the intake swaps the wiring, and undo restores it',
   await expect(left).toHaveValue('1, 2');
 });
 
+/** How yellow the canvas looks in a 40 px square around a screen point (FUEL is drawn yellow). */
+function yellowness(page: Page, at: { x: number; y: number }) {
+  return page.evaluate(({ x, y }) => {
+    const canvas = document.querySelector('canvas.field-canvas') as HTMLCanvasElement;
+    const box = canvas.getBoundingClientRect();
+    const dpr = canvas.width / box.width;
+    const data = canvas.getContext('2d')!.getImageData(Math.round((x - box.left) * dpr) - 20, Math.round((y - box.top) * dpr) - 20, 40, 40).data;
+    let sum = 0;
+    for (let i = 0; i < data.length; i += 4) sum += data[i] + data[i + 1] - 2 * data[i + 2];
+    return sum / (data.length / 4);
+  }, at);
+}
+
+test('FUEL shows faintly on the field, can be hidden, added and removed', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Field' }).click();
+  const fuel = page.locator('.element-row', { hasText: 'Neutral zone' });
+  await expect(fuel).toContainText('360 FUEL');
+  const center = await fieldPoint(page, FIELD.length / 2 + 0.3, FIELD.width / 2 + 0.6);
+  const shown = await yellowness(page, center);
+
+  const toggle = page.getByLabel('Show FUEL on the field');
+  await toggle.uncheck();
+  await expect.poll(() => yellowness(page, center)).toBeLessThan(shown - 5);
+  await toggle.check();
+  await expect.poll(() => yellowness(page, center)).toBeCloseTo(shown, 0);
+
+  await page.getByRole('button', { name: 'Add FUEL' }).click();
+  const added = page.locator('.element-row', { hasText: 'FUEL 2' });
+  await expect(added).toContainText('1 FUEL');
+  await added.getByLabel('Balls along Y').fill('6');
+  await expect(added).toContainText('6 FUEL');
+  await page.getByRole('button', { name: 'Remove FUEL 2' }).click();
+  await expect(added).toHaveCount(0);
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('.element-row', { hasText: 'FUEL 2' })).toContainText('6 FUEL');
+});
+
 test.describe('phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
   test('has no horizontal overflow', async ({ page }) => {

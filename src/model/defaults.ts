@@ -1,4 +1,4 @@
-import { presetElements } from './field';
+import { presetElements, presetFuel } from './field';
 import type { Auto, CodegenConfig, MotorType, Project, RobotConfig, Waypoint } from './types';
 
 let idCounter = 0;
@@ -184,6 +184,8 @@ export function defaultProject(): Project {
       width: preset.width,
       elements: presetElements(preset.id),
       elementsEnabled: true,
+      fuel: presetFuel(preset.id),
+      fuelEnabled: true,
     },
     autos: exampleAutos(),
     commands: [
