@@ -6,9 +6,11 @@ import { showToast, updateProject, useStore } from '../../model/store';
 import { NumberField, Section, Segmented } from '../components/controls';
 
 type TurnResult = 'short' | 'exact' | 'past';
+type SideResult = 'left' | 'straight' | 'right';
 
 const LABELS: Record<CalibrationChange['key'], string> = {
   wheelDiameter: 'Wheel diameter',
+  wheelBalance: 'Wheel balance (right vs left)',
   trackWidth: 'Track width',
   kV: 'kV',
   kA: 'kA',
@@ -17,17 +19,18 @@ const LABELS: Record<CalibrationChange['key'], string> = {
 function formatValue(key: CalibrationChange['key'], v: number): string {
   if (key === 'wheelDiameter') return `${(v / INCH).toFixed(3)} in`;
   if (key === 'trackWidth') return `${v.toFixed(3)} m`;
+  if (key === 'wheelBalance') return `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`;
   return v.toFixed(3);
 }
 
 /** Rounds a corrected value to what the settings show. */
 function rounded(key: CalibrationChange['key'], v: number): number {
-  return Number(v.toFixed(key === 'wheelDiameter' || key === 'trackWidth' ? 4 : 3));
+  return Number(v.toFixed(key === 'wheelDiameter' || key === 'trackWidth' || key === 'wheelBalance' ? 4 : 3));
 }
 
 /**
  * Robot tab section: turns what the robot really did in the calibration autos into corrected
- * settings, both at once, with the turn direction asked explicitly.
+ * settings, all at once, with the turn and drift directions asked explicitly.
  */
 export function CalibrationSection() {
   const robot = useStore((s) => s.project.robot);
@@ -35,8 +38,11 @@ export function CalibrationSection() {
   const [drove, setDrove] = useState(TEST_DRIVE_METERS);
   const [turn, setTurn] = useState<TurnResult>('exact');
   const [degrees, setDegrees] = useState(0);
+  const [side, setSide] = useState<SideResult>('straight');
+  const [sideCm, setSideCm] = useState(0);
   const turnOffset = turn === 'exact' ? 0 : turn === 'past' ? degrees : -degrees;
-  const result = calibrate(robot, { drove, turnOffset }, encoders);
+  const sideways = side === 'straight' ? 0 : ((side === 'left' ? 1 : -1) * sideCm) / 100;
+  const result = calibrate(robot, { drove, turnOffset, sideways }, encoders);
 
   const apply = () => {
     updateProject((p) => {
@@ -45,6 +51,8 @@ export function CalibrationSection() {
     setDrove(TEST_DRIVE_METERS);
     setTurn('exact');
     setDegrees(0);
+    setSide('straight');
+    setSideCm(0);
     showToast('Calibration applied. Generate the code and deploy it before running the tests again; results from the old code would correct twice.');
   };
 
@@ -53,8 +61,9 @@ export function CalibrationSection() {
       <p className="muted small">
         Run <strong>Test: drive 2 m</strong> and <strong>Test: turn 360°</strong> with code generated from the current settings (
         {encoders ? `wheel diameter ${(robot.wheelDiameter / INCH).toFixed(3)} in, ` : `kV ${robot.kV.toFixed(3)}, `}
-        track width {robot.trackWidth.toFixed(3)} m), then enter what the robot really did. Both may come from the same run: the
-        corrections are worked out together.
+        track width {robot.trackWidth.toFixed(3)} m, wheel balance {robot.wheelBalance >= 0 ? '+' : ''}
+        {(robot.wheelBalance * 100).toFixed(2)}%), then enter what the robot really did. Both may come from the same run: the corrections
+        are worked out together.
       </p>
       <NumberField
         label="Test: drive 2 m · distance it really drove"
@@ -66,6 +75,32 @@ export function CalibrationSection() {
         decimals={3}
         onChange={setDrove}
       />
+      <div className="field">
+        <span className="field-label">Test: drive 2 m · where it ended, seen from behind the robot</span>
+        <Segmented<SideResult>
+          label="Where the robot ended sideways after the drive"
+          value={side}
+          onChange={setSide}
+          options={[
+            { value: 'left', label: 'Left of the line' },
+            { value: 'straight', label: 'On the line' },
+            { value: 'right', label: 'Right of the line' },
+          ]}
+        />
+      </div>
+      {side !== 'straight' && (
+        <NumberField
+          label={side === 'left' ? 'Ended left of the line by' : 'Ended right of the line by'}
+          unit="cm"
+          value={sideCm}
+          min={0}
+          max={100}
+          step={0.5}
+          decimals={1}
+          onChange={setSideCm}
+          hint="Tape a straight line along a side bumper before the run. At the end, measure from the line to the middle of that bumper."
+        />
+      )}
       <div className="field">
         <span className="field-label">
           Test: turn 360° · where the front ended up (it turns left)

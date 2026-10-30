@@ -128,7 +128,12 @@ The only error encoders cannot see is wheel slip and scrub. The generated **cali
 **Estimate kV/kA** button gives a physics-based starting point until then.
 
 Enter what the robot really did in the **Calibration** section of the Robot tab: how far it drove,
-and whether the turn stopped short of the start line or went past it. The two tests depend on
+how far it ended to the left or right of a straight line, and whether the turn stopped short of
+the start line or went past it. The sideways drift sets the **wheel balance**: encoders count
+rotations, so if one side's wheels go a little farther per turn (tread wear, a different tyre) the
+robot curves on a straight line even though both encoders agree. A 1% difference is about 3 cm
+of drift over 2 m; the balance scales each side's encoder distance (or, without encoders, its
+voltage) to cancel it. The two tests depend on
 each other (the turn is measured with the wheel diameter the code was generated with), so the
 planner corrects the wheel diameter, the track width and kV/kA together from one run of both
 tests. Fixing them one at a time from the same run, or reading the turn the wrong way round,

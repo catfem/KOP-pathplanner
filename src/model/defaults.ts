@@ -38,6 +38,7 @@ export function defaultRobot(): RobotConfig {
     width: 0.86,
     trackWidth: 0.56,
     wheelDiameter: 6 * INCH,
+    wheelBalance: 0,
     gearRatio: 10.71,
     motor: 'CIM',
     motorsPerSide: 2,

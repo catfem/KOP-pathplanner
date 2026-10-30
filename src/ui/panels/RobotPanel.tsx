@@ -4,6 +4,7 @@ import { CONTROLLERS, DRIVETRAIN_PRESETS, ENCODER_LABELS, effectiveEncoder, moto
 import { showToast, updateProject, useStore } from '../../model/store';
 import type { ControllerType, EncoderType, Language, MotorType, RobotConfig } from '../../model/types';
 import { Checkbox, IntListField, NumberField, Section, SelectField, TextField } from '../components/controls';
+import { MAX_WHEEL_BALANCE } from '../../model/robotConfigs';
 import { CalibrationSection } from './CalibrationSection';
 import { RobotConfigs } from './RobotConfigs';
 
@@ -65,6 +66,17 @@ export function RobotPanel() {
           <NumberField label="Wheel diameter" unit="in" value={robot.wheelDiameter / INCH} min={1} step={0.25} decimals={2} onChange={(v) => set('wheelDiameter', v * INCH)} />
           <NumberField label="Gear ratio" unit=": 1" value={robot.gearRatio} min={1} step={0.01} decimals={2} onChange={(v) => set('gearRatio', v)} />
         </div>
+        <NumberField
+          label="Wheel balance (right vs left)"
+          unit="%"
+          value={robot.wheelBalance * 100}
+          min={-MAX_WHEEL_BALANCE * 100}
+          max={MAX_WHEEL_BALANCE * 100}
+          step={0.1}
+          decimals={2}
+          onChange={(v) => set('wheelBalance', v / 100)}
+          hint="How much farther the right wheels travel than the left ones per turn. Set it from the sideways drift of “Test: drive 2 m” under Calibration."
+        />
         <div className="grid-2">
           <SelectField<MotorType>
             label="Motor"

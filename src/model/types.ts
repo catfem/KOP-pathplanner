@@ -81,6 +81,13 @@ export interface RobotConfig {
   /** Effective (kinematic) track width used for turning math, m. */
   trackWidth: number;
   wheelDiameter: number;
+  /**
+   * How much farther the right wheels travel than the left ones for the same encoder count
+   * (without encoders: for the same voltage), as a fraction: 0.01 = 1% farther. Wheel wear or a
+   * different tread makes a robot curve on a straight line even with encoders, which only count
+   * rotations. Set from the sideways drift in "Test: drive 2 m".
+   */
+  wheelBalance: number;
   /** Motor rotations per wheel rotation. */
   gearRatio: number;
   motor: MotorType;

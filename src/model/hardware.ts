@@ -44,6 +44,14 @@ export function effectiveEncoder(robot: RobotConfig): EncoderType {
   return robot.encoder;
 }
 
+/**
+ * Per-side factors from the left/right wheel balance: true wheel travel per nominal meter that the
+ * encoders count (with encoders), or the division applied to each side's voltage (without).
+ */
+export function balanceScales(balance: number): { left: number; right: number } {
+  return { left: 1 - balance / 2, right: 1 + balance / 2 };
+}
+
 /** Wheel meters per encoder unit (rio: cycles, Talon: sensor units, SPARK MAX: motor rotations). */
 export function metersPerEncoderUnit(robot: RobotConfig): number {
   const circumference = Math.PI * robot.wheelDiameter;

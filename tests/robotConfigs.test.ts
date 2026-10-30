@@ -47,6 +47,8 @@ describe('robot settings validation', () => {
     expect(robot.rightIds).toEqual(base.rightIds);
     expect(robot.leftEncoderPorts).toEqual(base.leftEncoderPorts);
     expect(robot).not.toHaveProperty('unknownKey');
+    expect(normalizeRobot({ wheelBalance: -0.012 }).wheelBalance).toBe(-0.012);
+    expect(normalizeRobot({ wheelBalance: 0.5 }).wheelBalance).toBe(0);
     expect(normalizeRobot(null)).toEqual(base);
   });
 

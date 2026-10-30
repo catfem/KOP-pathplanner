@@ -62,6 +62,18 @@ public final class KopDriveConstants {
   /** Effective (kinematic) track width in meters. Tune this if turns over/undershoot. */
   public static final double kTrackWidthMeters = ${float(r.trackWidth, 4)};
   public static final double kWheelDiameterMeters = ${float(r.wheelDiameter, 4)};
+  /**
+   * How much farther the right wheels travel than the left ones for the same encoder count
+   * (without encoders: for the same voltage), as a fraction. Wheel wear or a different tread makes
+   * a robot curve on a straight line even with encoders. Set it from the sideways drift of the drive
+   * 2 m test auto (planner Robot tab, Calibration).
+   */
+  public static final double kWheelBalance = ${float(r.wheelBalance, 5)};
+  /**
+   * ${enc === 'none' ? "Each side's voltage is divided by these" : 'Encoder distances are multiplied by these'} to even out the sides.
+   */
+  public static final double kLeftDistanceScale = 1.0 - kWheelBalance / 2.0;
+  public static final double kRightDistanceScale = 1.0 + kWheelBalance / 2.0;
   /** Motor rotations per wheel rotation. */
   public static final double kGearRatio = ${float(r.gearRatio, 4)};
   /** Field width, used to mirror poses shown on the dashboard. */
@@ -1097,7 +1109,7 @@ ${init.join('\n')}
 
   @Override
   public void setWheelVoltages(double leftVolts, double rightVolts) {
-${setVolts.join('\n')}
+${enc === 'none' ? '    // No encoders: the wheel balance evens out the sides by voltage.\n    leftVolts /= kLeftDistanceScale;\n    rightVolts /= kRightDistanceScale;\n' : ''}${setVolts.join('\n')}
   }
 
   /** Open loop percent output per side, -1 to 1. */
@@ -1123,22 +1135,22 @@ ${setPercent.join('\n')}
 
   @Override
   public double getLeftDistanceMeters() {
-    return ${leftDist};
+    return ${enc === 'none' ? leftDist : `kLeftDistanceScale * ${leftDist}`};
   }
 
   @Override
   public double getRightDistanceMeters() {
-    return ${rightDist};
+    return ${enc === 'none' ? rightDist : `kRightDistanceScale * ${rightDist}`};
   }
 
   @Override
   public double getLeftVelocityMetersPerSecond() {
-    return ${leftVel};
+    return ${enc === 'none' ? leftVel : `kLeftDistanceScale * ${leftVel}`};
   }
 
   @Override
   public double getRightVelocityMetersPerSecond() {
-    return ${rightVel};
+    return ${enc === 'none' ? rightVel : `kRightDistanceScale * ${rightVel}`};
   }
 
   @Override
@@ -1240,11 +1252,13 @@ function testsFile(pkg: string, project: Project): string {
   // section must start from those.
   const driveAdvice = encoders
     ? `"drive 2 m: the encoders measured left %.3f m, right %.3f m. Measure how far the robot"
-                              + " really went and enter it on the planner's Robot tab, under Calibration"
-                              + " (this code: wheel diameter %.4f m)."`
-    : `"drive 2 m (open loop). Measure how far the robot really went and enter it on the"
-                              + " planner's Robot tab, under Calibration (this code: kV %.3f)."`;
-  const driveArgs = encoders ? 'left, right, kWheelDiameterMeters' : 'kV';
+                              + " really went, and how far it ended left or right of a straight line, and"
+                              + " enter both on the planner's Robot tab, under Calibration (this code:"
+                              + " wheel diameter %.4f m, wheel balance %.4f)."`
+    : `"drive 2 m (open loop). Measure how far the robot really went, and how far it ended"
+                              + " left or right of a straight line, and enter both on the planner's Robot"
+                              + " tab, under Calibration (this code: kV %.3f, wheel balance %.4f)."`;
+  const driveArgs = encoders ? 'left, right, kWheelDiameterMeters, kWheelBalance' : 'kV, kWheelBalance';
   const turnAdvice = encoders
     ? `"turn 360: the robot turned left (counter-clockwise); the encoders measured left %.3f m,"
                               + " right %.3f m (planned ${float(-halfTurn, 3)} / ${float(halfTurn, 3)} m). Check whether the front stopped"
@@ -1274,7 +1288,8 @@ import edu.wpi.first.wpilibj2.command.Commands;
  * both tests with the same code; the planner corrects the two settings together.
  *
  * <ul>
- *   <li><b>Test: drive 2 m</b> drives straight ahead. Measure how far the robot really went.
+ *   <li><b>Test: drive 2 m</b> drives straight ahead. Measure how far the robot really went and how
+ *       far it ended to the left or right of a straight line (tape a line along a bumper first).
  *   <li><b>Test: turn 360</b> turns one full circle to the left. Put a strip of tape along a bumper
  *       first, then check whether the front stopped short of the start line or went past it.${
     encoders

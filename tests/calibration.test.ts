@@ -4,6 +4,8 @@ import { INCH, defaultRobot } from '../src/model/defaults';
 import type { RobotConfig } from '../src/model/types';
 import { PERFECT_SIM, simulatePlan } from '../src/planner/simulate';
 import { type Plan, buildTurnSamples } from '../src/planner/trajectory';
+import { testTrajectories } from '../src/codegen/common';
+import { defaultProject } from '../src/model/defaults';
 
 /** A real robot whose wheels and effective track width differ from the settings. */
 const real = { wheelDiameter: 6.3 * INCH, trackWidth: 0.66 };
@@ -110,4 +112,56 @@ describe('calibration from the test autos', () => {
     const after = simulatePlan(turnPlan(fixed), fixed, { ...PERFECT_SIM, trackScale: (config.trackWidth * scrub) / fixed.trackWidth });
     expect(Math.abs(after.headingErrorDeg)).toBeLessThan(1.5);
   });
+
+  it('reads the wheel balance from the sideways drift of the drive test', () => {
+    const config = defaultRobot();
+    // 3.4 cm to the left after 2 m on a 0.56 m track: the right wheels go about 1% farther.
+    const change = calibrate(config, { drove: 2, turnOffset: 0, sideways: 0.034 }, true).changes;
+    expect(change).toHaveLength(1);
+    expect(change[0].key).toBe('wheelBalance');
+    expect(change[0].to).toBeCloseTo((2 * 0.56 * 0.034) / 4, 3);
+    const right = calibrate(config, { drove: 2, turnOffset: 0, sideways: -0.034 }, true).changes[0].to;
+    expect(right).toBeCloseTo(-change[0].to, 3);
+    // Much more than tread wear: applied, with a warning to check the setup.
+    expect(calibrate(config, { drove: 2, turnOffset: 0, sideways: 0.6 }, true).warnings.join(' ')).toContain('more than tread wear');
+    // Far more than wheels explain: no change, a warning instead.
+    const silly = calibrate(config, { drove: 2, turnOffset: 0, sideways: 0.9 }, true);
+    expect(silly.changes).toEqual([]);
+    expect(silly.warnings.join(' ')).toContain('started square');
+  });
+
+  const drivePlan = (robot: RobotConfig): Plan => {
+    const project = defaultProject();
+    project.robot = robot;
+    const { drive } = testTrajectories(project);
+    const last = drive[drive.length - 1];
+    return {
+      steps: [{ kind: 'drive', start: 0, duration: last.t, waypointIndex: 0, toIndex: 1, reversed: false, distance: 2, samples: drive, markers: [] }],
+      totalTime: last.t,
+      startPose: { x: 0, y: 0, heading: 0 },
+      endPose: { x: last.x, y: last.y, heading: last.heading },
+      totalDistance: 2,
+      peakVoltage: 0,
+      warnings: [],
+    };
+  };
+  /** The simulator's wheel size setting is relative to the configured balance. */
+  const relative = (robot: RobotConfig, trueRatio: number) => trueRatio / ((1 + robot.wheelBalance / 2) / (1 - robot.wheelBalance / 2));
+
+  for (const encoders of [true, false]) {
+    it(`straightens the drive on the simulated robot whose right wheels go 1% farther (${encoders ? 'encoders' : 'open loop'})`, () => {
+      const config = { ...defaultRobot(), encoder: encoders ? ('rio' as const) : ('none' as const) };
+      const trueRatio = 1.01;
+      const run = (robot: RobotConfig) => {
+        const sim = simulatePlan(drivePlan(robot), robot, { ...PERFECT_SIM, wheelSizeScale: relative(robot, trueRatio) });
+        return sim.trace[sim.trace.length - 1];
+      };
+      const before = run(config);
+      expect(before.y).toBeGreaterThan(0.02);
+      const fixed = apply(config, calibrate(config, { drove: before.x, turnOffset: 0, sideways: before.y }, encoders).changes);
+      expect(fixed.wheelBalance).toBeGreaterThan(0.005);
+      const after = run(fixed);
+      expect(Math.abs(after.y)).toBeLessThan(encoders ? 0.003 : before.y / 3);
+    });
+  }
 });

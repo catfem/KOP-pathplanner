@@ -10,6 +10,7 @@
 // removing it. This module does both corrections together, with the direction
 // stated explicitly.
 
+import { MAX_WHEEL_BALANCE } from './robotConfigs';
 import type { RobotConfig } from './types';
 
 /** Distance of the generated "Test: drive 2 m" auto, m. */
@@ -24,10 +25,15 @@ export interface CalibrationMeasurements {
    * stopped short. 0 means no correction.
    */
   turnOffset: number;
+  /**
+   * Where the robot ended after "Test: drive 2 m", in meters to the side of the straight line it
+   * started on: positive to the left, negative to the right. 0 means no correction.
+   */
+  sideways?: number;
 }
 
 export interface CalibrationChange {
-  key: 'wheelDiameter' | 'trackWidth' | 'kV' | 'kA';
+  key: 'wheelDiameter' | 'wheelBalance' | 'trackWidth' | 'kV' | 'kA';
   from: number;
   to: number;
 }
@@ -43,7 +49,9 @@ export interface CalibrationResult {
  * Corrected settings from the calibration autos, run with code generated from `robot`.
  * With encoders the drive test corrects the wheel diameter (and kV/kA, which are per meter);
  * open loop it corrects kV. The turn test corrects the track width, including the distance
- * correction because it ran with the same code.
+ * correction because it ran with the same code. The sideways drift of the drive test corrects the
+ * left/right wheel balance: with one side's wheels a fraction d farther per count, a straight drive
+ * of length D bends into an arc that ends d * D^2 / (2 * track width) to the side.
  */
 export function calibrate(robot: RobotConfig, m: CalibrationMeasurements, encoders: boolean): CalibrationResult {
   const warnings: string[] = [];
@@ -88,6 +96,26 @@ export function calibrate(robot: RobotConfig, m: CalibrationMeasurements, encode
       warnings.push(
         `A track width of ${trackWidth.toFixed(3)} m is unusual for a ${frame.toFixed(2)} m wide robot. Check the turn direction: "went past" means it turned more than a full circle.`,
       );
+    }
+  }
+  const sideways = m.sideways !== undefined && Number.isFinite(m.sideways) ? m.sideways : 0;
+  if (Math.abs(sideways) > 1e-9) {
+    const trackWidth = changes.find((c) => c.key === 'trackWidth')?.to ?? robot.trackWidth;
+    // Right-over-left travel per count, now and as measured; the balance keeps the average at 1.
+    const ratio = (1 + robot.wheelBalance / 2) / (1 - robot.wheelBalance / 2);
+    const corrected = ratio * (1 + (2 * trackWidth * sideways) / (drove * drove));
+    const balance = (2 * (corrected - 1)) / (corrected + 1);
+    if (Math.abs(balance) > MAX_WHEEL_BALANCE) {
+      warnings.push(
+        `${(Math.abs(sideways) * 100).toFixed(0)} cm sideways over ${drove.toFixed(1)} m is more than different wheels explain. Check that the robot started square to the line, and look for a dragging wheel, a loose chain or a slipping tread.`,
+      );
+    } else {
+      changes.push({ key: 'wheelBalance', from: robot.wheelBalance, to: balance });
+      if (Math.abs(balance) > 0.05) {
+        warnings.push(
+          `A ${(Math.abs(balance) * 100).toFixed(1)}% difference between the sides is more than tread wear: check that the robot started square to the line, and look for a dragging wheel or a loose chain.`,
+        );
+      }
     }
   }
   return { changes, warnings };
