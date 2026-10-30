@@ -18,6 +18,10 @@ controller encoders, or no sensors at all.
   either side of them and the **TRENCHes**, all editable. The planner slows down on BUMPs, warns
   when the bumpers would hit a HUB (or a TRENCH for tall robots), and can place a shooting spot
   with the front bumper against the HUB.
+- **FUEL positions** (optional): blocks of 5.91 in balls drawn faintly on the field for
+  reference, edited like the HUBs on the Field tab (center, balls along X and Y). The 2026
+  starting layout is approximate (360 FUEL in the middle of the neutral zone); the planner
+  ignores FUEL.
 - **Bumper position guides**: on-field measurements from the starting bumpers to the alliance
   wall and guardrail, and from the front bumper to the aimed HUB, so you can place the robot
   exactly where the plan starts.

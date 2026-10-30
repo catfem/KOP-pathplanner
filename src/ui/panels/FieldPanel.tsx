@@ -1,8 +1,18 @@
 import { FIELD_PRESETS } from '../../model/defaults';
-import { elementLabel, presetElements, rebuilt2026Elements } from '../../model/field';
+import { newId } from '../../model/defaults';
+import {
+  MAX_FUEL_PER_SIDE,
+  elementLabel,
+  fuelCount,
+  presetElements,
+  presetFuel,
+  rebuilt2026Elements,
+  rebuilt2026Fuel,
+} from '../../model/field';
 import { setFieldImage, setUi, showToast, updateProject, useStore } from '../../model/store';
-import type { FieldElement } from '../../model/types';
-import { Checkbox, NumberField, Section, SelectField } from '../components/controls';
+import type { FieldElement, FuelGroup } from '../../model/types';
+import { Checkbox, IconButton, NumberField, Section, SelectField, TextField } from '../components/controls';
+import { IconTrash } from '../components/icons';
 
 function ElementEditor({ element, index, showSize }: { element: FieldElement; index: number; showSize: boolean }) {
   const set = (key: 'x' | 'y' | 'sizeX' | 'sizeY', v: number) =>
@@ -28,6 +38,45 @@ function ElementEditor({ element, index, showSize }: { element: FieldElement; in
             <NumberField label="Size Y" unit="m" value={element.sizeY} min={0.05} step={0.01} onChange={(v) => set('sizeY', v)} />
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+function FuelEditor({ group, index }: { group: FuelGroup; index: number }) {
+  const set = <K extends 'name' | 'x' | 'y' | 'columns' | 'rows'>(key: K, v: FuelGroup[K]) =>
+    updateProject(
+      (p) => {
+        const g = p.field.fuel[index];
+        if (g) g[key] = v;
+      },
+      { coalesce: `fuel:${group.id}:${key}` },
+    );
+  const side = (v: number) => Math.max(1, Math.min(MAX_FUEL_PER_SIDE, Math.round(v)));
+  return (
+    <div className="element-row">
+      <div className="element-title">
+        <span className="swatch fuel" aria-hidden />
+        {group.name || 'FUEL'}
+        <span className="muted small">{fuelCount(group)} FUEL</span>
+        <IconButton
+          className="element-remove"
+          title={`Remove ${group.name || 'this FUEL'}`}
+          onClick={() =>
+            updateProject((p) => {
+              p.field.fuel.splice(index, 1);
+            })
+          }
+        >
+          <IconTrash />
+        </IconButton>
+      </div>
+      <TextField label="Name" value={group.name} onChange={(v) => set('name', v)} />
+      <div className="grid-2">
+        <NumberField label="Center X" unit="m" value={group.x} step={0.01} onChange={(v) => set('x', v)} />
+        <NumberField label="Center Y" unit="m" value={group.y} step={0.01} onChange={(v) => set('y', v)} />
+        <NumberField label="Balls along X" value={group.columns} min={1} max={MAX_FUEL_PER_SIDE} step={1} decimals={0} onChange={(v) => set('columns', side(v))} />
+        <NumberField label="Balls along Y" value={group.rows} min={1} max={MAX_FUEL_PER_SIDE} step={1} decimals={0} onChange={(v) => set('rows', side(v))} />
       </div>
     </div>
   );
@@ -64,6 +113,7 @@ export function FieldPanel() {
                 p.field.length = preset.length;
                 p.field.width = preset.width;
                 p.field.elements = presetElements(v);
+                p.field.fuel = presetFuel(v);
               }
             })
           }
@@ -181,6 +231,55 @@ export function FieldPanel() {
           </button>
         </div>
       )}
+
+      <Section title="FUEL">
+        <Checkbox
+          label="Show FUEL on the field"
+          checked={field.fuelEnabled}
+          onChange={(v) => updateProject((p) => (p.field.fuelEnabled = v))}
+          hint="Drawn faintly under the paths, for reference. The planner ignores FUEL."
+        />
+        {field.fuel.map((g, i) => (
+          <FuelEditor key={g.id} group={g} index={i} />
+        ))}
+        <p className="muted small">
+          FUEL balls are 5.91 in. The 2026 starting layout here is approximate (360 FUEL in the middle of the NEUTRAL ZONE): check it against
+          the game manual and adjust.
+        </p>
+        <div className="button-row">
+          <button
+            type="button"
+            className="btn small"
+            onClick={() =>
+              updateProject((p) => {
+                p.field.fuel.push({
+                  id: newId('fuel'),
+                  name: `FUEL ${p.field.fuel.length + 1}`,
+                  x: p.field.length / 2,
+                  y: p.field.width / 2,
+                  columns: 1,
+                  rows: 1,
+                });
+                p.field.fuelEnabled = true;
+              })
+            }
+          >
+            Add FUEL
+          </button>
+          <button
+            type="button"
+            className="btn small"
+            onClick={() =>
+              updateProject((p) => {
+                p.field.fuel = rebuilt2026Fuel();
+                p.field.fuelEnabled = true;
+              })
+            }
+          >
+            Reset to the 2026 layout
+          </button>
+        </div>
+      </Section>
     </div>
   );
 }

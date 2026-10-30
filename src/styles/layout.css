@@ -789,6 +789,10 @@ button.seq-time {
   font-weight: 600;
 }
 
+.element-title .element-remove {
+  margin-left: auto;
+}
+
 .swatch {
   flex: none;
   width: 12px;
@@ -806,6 +810,12 @@ button.seq-time {
 
 .swatch.bump {
   opacity: 0.6;
+}
+
+.swatch.fuel {
+  border-radius: 50%;
+  background: var(--canvas-fuel);
+  opacity: 0.55;
 }
 
 .swatch.trench {

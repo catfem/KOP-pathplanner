@@ -4,14 +4,18 @@ import { defaultProject, defaultRobot } from '../src/model/defaults';
 import {
   BUMP_DEPTH,
   BUMP_WIDTH,
+  FUEL_DIAMETER,
   HUB_SIZE,
   bumperAgainst,
   bumperDistances,
   bumperGap,
   footprint,
+  fuelCount,
+  fuelPositions,
   overlapsElement,
   presetElements,
   rebuilt2026Elements,
+  rebuilt2026Fuel,
 } from '../src/model/field';
 import { DRIVETRAIN_PRESETS, motorControllerIssue } from '../src/model/hardware';
 import { normalizeProject } from '../src/model/store';
@@ -93,6 +97,54 @@ describe('2026 field elements', () => {
     expect(p.field.elementsEnabled).toBe(true);
     const w = normalizeProject({ autos: [{ name: 'A', waypoints: [{ x: 1, y: 2 }] }] }).autos[0].waypoints[0];
     expect(w.aimAt).toBeNull();
+  });
+});
+
+describe('FUEL', () => {
+  it('lays out a group of touching 5.91 in balls around its center', () => {
+    const g = { id: 'g', name: 'G', x: 3, y: 2, columns: 4, rows: 2 };
+    const balls = fuelPositions(g);
+    expect(balls).toHaveLength(fuelCount(g));
+    expect(FUEL_DIAMETER).toBeCloseTo(0.150, 3);
+    const xs = [...new Set(balls.map((b) => b.x.toFixed(6)))].map(Number);
+    const ys = [...new Set(balls.map((b) => b.y.toFixed(6)))].map(Number);
+    expect(xs).toHaveLength(4);
+    expect(ys).toHaveLength(2);
+    expect(xs[1] - xs[0]).toBeCloseTo(FUEL_DIAMETER, 9);
+    expect(xs.reduce((a, b) => a + b) / xs.length).toBeCloseTo(3, 9);
+    expect(ys.reduce((a, b) => a + b) / ys.length).toBeCloseTo(2, 9);
+    expect(fuelPositions({ ...g, columns: 1, rows: 1 })).toEqual([{ x: 3, y: 2 }]);
+  });
+
+  it('puts the 2026 FUEL in the middle of the field, clear of the HUBs', () => {
+    const [neutral] = rebuilt2026Fuel();
+    expect(fuelCount(neutral)).toBe(360);
+    expect(neutral.x).toBeCloseTo(16.541 / 2, 6);
+    expect(neutral.y).toBeCloseTo(8.069 / 2, 6);
+    const half = (neutral.columns * FUEL_DIAMETER) / 2;
+    for (const hub of rebuilt2026Elements().filter((e) => e.kind === 'hub')) {
+      expect(Math.abs(hub.x - neutral.x)).toBeGreaterThan(half + hub.sizeX / 2);
+    }
+  });
+
+  it('gives old projects the 2026 FUEL, keeps saved FUEL and drops broken groups', () => {
+    const old = normalizeProject({ field: { preset: 'frc2026', length: 16.541, width: 8.069 } });
+    expect(old.field.fuel).toEqual(rebuilt2026Fuel());
+    expect(old.field.fuelEnabled).toBe(true);
+    const saved = normalizeProject({
+      field: {
+        preset: 'frc2026',
+        length: 16.541,
+        width: 8.069,
+        fuelEnabled: false,
+        fuel: [{ id: 'a', name: 'Depot', x: 0.5, y: 6, columns: 4, rows: 6 }, { x: 'far' }, { x: 1, y: 1, columns: 500, rows: 0 }],
+      },
+    });
+    expect(saved.field.fuelEnabled).toBe(false);
+    expect(saved.field.fuel).toHaveLength(2);
+    expect(saved.field.fuel[0]).toEqual({ id: 'a', name: 'Depot', x: 0.5, y: 6, columns: 4, rows: 6 });
+    expect(saved.field.fuel[1]).toMatchObject({ columns: 60, rows: 1 });
+    expect(normalizeProject({ field: { preset: 'custom', length: 10, width: 5 } }).field.fuel).toEqual([]);
   });
 });
 

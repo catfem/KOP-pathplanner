@@ -1,6 +1,6 @@
 // Canvas rendering and hit testing for the field view.
 
-import { KIND_LABELS, bumperDistances, bumperGap, formatDistance } from '../../model/field';
+import { FUEL_DIAMETER, KIND_LABELS, bumperDistances, bumperGap, formatDistance, fuelCount, fuelPositions } from '../../model/field';
 import type { Auto, FieldConfig, FieldElement, RobotConfig } from '../../model/types';
 import { type Vec, add, fromPolar, sub } from '../../planner/geometry';
 import type { SimResult } from '../../planner/simulate';
@@ -101,6 +101,7 @@ export interface Palette {
   labelBg: string;
   labelText: string;
   bumpHatch: string;
+  fuel: string;
   /** Path speed ramp: hue, saturation and lightness range (HSL). */
   pathHue: number;
   pathSat: number;
@@ -137,6 +138,7 @@ export function readPalette(el: Element): Palette {
     labelBg: v('--canvas-label-bg', 'rgba(16,18,20,0.8)'),
     labelText: v('--canvas-label-text', '#d5d8dd'),
     bumpHatch: v('--canvas-bump-hatch', 'rgba(213,216,221,0.16)'),
+    fuel: v('--canvas-fuel', '#c4ad58'),
     pathHue: n('--canvas-path-hue', 172),
     pathSat: n('--canvas-path-sat', 28),
     pathLightSlow: n('--canvas-path-light-slow', 40),
@@ -629,11 +631,44 @@ function drawGuides(ctx: CanvasRenderingContext2D, input: RenderInput): void {
   }
 }
 
+/** FUEL: faint balls under the paths, fainter than the HUBs (reference only). */
+function drawFuel(ctx: CanvasRenderingContext2D, input: RenderInput): void {
+  const { view: v, field, palette: pal } = input;
+  if (!field.fuelEnabled || field.fuel.length === 0) return;
+  // A small gap between touching balls keeps them readable as balls.
+  const r = (FUEL_DIAMETER / 2) * v.scale * 0.88;
+  ctx.save();
+  ctx.beginPath();
+  for (const g of field.fuel) {
+    for (const p of fuelPositions(g)) {
+      const s = toScreen(v, p);
+      ctx.moveTo(s.x + r, s.y);
+      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    }
+  }
+  ctx.fillStyle = alpha(pal.fuel, 0.2);
+  ctx.fill();
+  if (r > 2) {
+    ctx.strokeStyle = alpha(pal.fuel, 0.38);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.restore();
+  for (const g of field.fuel) {
+    const w = g.columns * FUEL_DIAMETER * v.scale;
+    const h = g.rows * FUEL_DIAMETER * v.scale;
+    if (w < 30 || h < 30) continue;
+    const c = toScreen(v, g);
+    smallLabel(ctx, pal, `FUEL ${fuelCount(g)}`, c.x, c.y, h > w * 1.5);
+  }
+}
+
 export function renderField(ctx: CanvasRenderingContext2D, input: RenderInput): void {
   ctx.fillStyle = input.palette.surround;
   ctx.fillRect(0, 0, input.width, input.height);
   drawField(ctx, input);
   drawElements(ctx, input);
+  drawFuel(ctx, input);
   drawStopGhosts(ctx, input);
   drawPath(ctx, input);
   drawSim(ctx, input);

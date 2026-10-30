@@ -168,6 +168,20 @@ export interface FieldElement {
   sizeY: number;
 }
 
+/**
+ * A block of FUEL (the 2026 balls) shown on the field, positioned by its center: `columns` balls
+ * along the field length (x) by `rows` along its width (y), touching. For reference only: the
+ * planner ignores FUEL.
+ */
+export interface FuelGroup {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  columns: number;
+  rows: number;
+}
+
 export interface FieldConfig {
   preset: string;
   length: number;
@@ -175,6 +189,9 @@ export interface FieldConfig {
   elements: FieldElement[];
   /** Draw the elements and plan around them (aiming, BUMP speed limit, collision checks). */
   elementsEnabled: boolean;
+  fuel: FuelGroup[];
+  /** Draw the FUEL (faintly, under the paths). */
+  fuelEnabled: boolean;
 }
 
 export interface NamedCommand {

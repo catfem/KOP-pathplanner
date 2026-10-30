@@ -1,7 +1,7 @@
 // Field elements (2026 REBUILT HUBs, BUMPs and TRENCHes) and the geometry used
 // to aim at them, keep the robot clear of them, and slow down over BUMPs.
 
-import type { FieldElement, FieldElementKind } from './types';
+import type { FieldElement, FieldElementKind, FuelGroup } from './types';
 
 const IN = 0.0254;
 
@@ -12,12 +12,16 @@ export const BUMP_WIDTH = 73.0 * IN; // along the field width
 export const TRENCH_DEPTH = 47.0 * IN;
 export const TRENCH_WIDTH = 65.65 * IN;
 export const TRENCH_CLEARANCE = 22.25 * IN;
+export const FUEL_DIAMETER = 5.91 * IN;
+/** Most balls a FUEL group holds along one side. */
+export const MAX_FUEL_PER_SIDE = 60;
 
 /**
  * HUB centers from the official 2026 welded AprilTag layout (the HUB tags sit on
  * the four faces: blue faces at x 4.022 / 5.229 m, y 3.431 / 4.638 m).
  */
 const HUB_CENTER_X = { blue: (4.022 + 5.229) / 2, red: (11.312 + 12.519) / 2 };
+const FIELD_2026_LENGTH = 16.541;
 const FIELD_2026_WIDTH = 8.069;
 
 export const KIND_LABELS: Record<FieldElementKind, string> = { hub: 'HUB', bump: 'BUMP', trench: 'TRENCH' };
@@ -49,6 +53,34 @@ export function rebuilt2026Elements(): FieldElement[] {
 /** Field elements of a preset (only the 2026 field has any). */
 export function presetElements(preset: string): FieldElement[] {
   return preset === 'frc2026' ? rebuilt2026Elements() : [];
+}
+
+/**
+ * Starting FUEL on the 2026 field, approximately: a block of 360 balls in the middle of the
+ * NEUTRAL ZONE. It is not taken from an official drawing, so teams adjust it to the game manual.
+ */
+export function rebuilt2026Fuel(): FuelGroup[] {
+  return [{ id: 'fuel-neutral', name: 'Neutral zone', x: FIELD_2026_LENGTH / 2, y: FIELD_2026_WIDTH / 2, columns: 12, rows: 30 }];
+}
+
+/** FUEL of a preset (only the 2026 field has any). */
+export function presetFuel(preset: string): FuelGroup[] {
+  return preset === 'frc2026' ? rebuilt2026Fuel() : [];
+}
+
+export function fuelCount(g: FuelGroup): number {
+  return g.columns * g.rows;
+}
+
+/** Centers of the balls in a FUEL group. */
+export function fuelPositions(g: FuelGroup): Vec2[] {
+  const out: Vec2[] = [];
+  const x0 = g.x - ((g.columns - 1) * FUEL_DIAMETER) / 2;
+  const y0 = g.y - ((g.rows - 1) * FUEL_DIAMETER) / 2;
+  for (let i = 0; i < g.columns; i++) {
+    for (let j = 0; j < g.rows; j++) out.push({ x: x0 + i * FUEL_DIAMETER, y: y0 + j * FUEL_DIAMETER });
+  }
+  return out;
 }
 
 export function elementLabel(e: FieldElement): string {

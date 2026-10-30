@@ -3,9 +3,9 @@
 import { useSyncExternalStore } from 'react';
 import { DEFAULT_SIM, type SimSettings } from '../planner/simulate';
 import { defaultProject, newId } from './defaults';
-import { presetElements } from './field';
+import { MAX_FUEL_PER_SIDE, presetElements, presetFuel } from './field';
 import { type RobotSettings, type SavedRobotConfig, normalizeCodegen, normalizeRobot, normalizeSavedConfigs } from './robotConfigs';
-import type { Auto, FieldConfig, Project, Waypoint } from './types';
+import type { Auto, FieldConfig, FuelGroup, Project, Waypoint } from './types';
 
 export type Tool = 'select' | 'add';
 export type InspectorTab = 'point' | 'auto' | 'robot' | 'field' | 'sim';
@@ -106,7 +106,25 @@ function normalizeField(raw: Partial<FieldConfig> | undefined, base: FieldConfig
   if (!Array.isArray(raw?.elements)) field.elements = presetElements(field.preset);
   field.elements = field.elements.filter((e) => e && typeof e.id === 'string' && Number.isFinite(e.x) && Number.isFinite(e.y));
   field.elementsEnabled = raw?.elementsEnabled ?? true;
+  // Older projects have no FUEL: give the 2026 field its starting FUEL.
+  field.fuel = Array.isArray(raw?.fuel) ? raw.fuel.flatMap(normalizeFuel) : presetFuel(field.preset);
+  field.fuelEnabled = typeof raw?.fuelEnabled === 'boolean' ? raw.fuelEnabled : true;
   return field;
+}
+
+function normalizeFuel(g: Partial<FuelGroup> | null | undefined, i: number): FuelGroup[] {
+  if (!g || !Number.isFinite(g.x) || !Number.isFinite(g.y)) return [];
+  const side = (n: unknown) => Math.max(1, Math.min(MAX_FUEL_PER_SIDE, Math.round(Number(n) || 1)));
+  return [
+    {
+      id: typeof g.id === 'string' ? g.id : `fuel_${i}`,
+      name: typeof g.name === 'string' ? g.name : `FUEL ${i + 1}`,
+      x: g.x as number,
+      y: g.y as number,
+      columns: side(g.columns),
+      rows: side(g.rows),
+    },
+  ];
 }
 
 function normalizeWaypoint(w: Partial<Waypoint>, i: number): Waypoint {

@@ -61,6 +61,7 @@
   --canvas-label-bg: rgba(20, 23, 26, 0.78);
   --canvas-label-text: #e3e6ea;
   --canvas-bump-hatch: rgba(227, 230, 234, 0.16);
+  --canvas-fuel: #d8c060;
   --canvas-path-hue: 172;
   --canvas-path-sat: 26;
   --canvas-path-light-slow: 42;
@@ -132,6 +133,7 @@
     --canvas-label-bg: rgba(14, 16, 18, 0.82);
     --canvas-label-text: #cfd3d8;
     --canvas-bump-hatch: rgba(207, 211, 216, 0.12);
+    --canvas-fuel: #c4ad58;
     --canvas-path-light-slow: 38;
     --canvas-path-light-fast: 62;
   }
@@ -188,6 +190,7 @@
   --canvas-label-bg: rgba(14, 16, 18, 0.82);
   --canvas-label-text: #cfd3d8;
   --canvas-bump-hatch: rgba(207, 211, 216, 0.12);
+  --canvas-fuel: #c4ad58;
   --canvas-path-light-slow: 38;
   --canvas-path-light-fast: 62;
 }
