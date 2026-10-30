@@ -296,6 +296,37 @@ test('calibration corrects the wheel diameter and track width together, and undo
   await expect(track).toHaveValue('0.56');
 });
 
+test('calibration reads the sideways drift into the wheel balance', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Robot' }).click();
+  await page.getByRole('radio', { name: 'Left of the line' }).click();
+  await page.getByLabel('Ended left of the line by').fill('3.4');
+  const result = page.getByLabel('Corrected settings');
+  // 2 * 0.56 m * 0.034 m / (2 m)^2 = 0.95% farther on the right.
+  await expect(result).toContainText('Wheel balance (right vs left)');
+  await expect(result).toContainText('+0.00% → +0.95%');
+  await page.getByRole('button', { name: 'Apply calibration' }).click();
+  await expect(page.getByLabel('Wheel balance (right vs left)')).toHaveValue('0.95');
+});
+
+test('switching the front to the intake swaps the wiring, and undo restores it', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Robot' }).click();
+  const left = page.getByLabel('Left CAN IDs');
+  const right = page.getByLabel('Right CAN IDs');
+  await expect(page.getByRole('radio', { name: 'Head', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(left).toHaveValue('1, 2');
+
+  await page.getByRole('radio', { name: 'Intake', exact: true }).click();
+  await expect(page.getByRole('radio', { name: 'Intake', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByText('The intake end is now the front.')).toBeVisible();
+  await expect(left).toHaveValue('3, 4');
+  await expect(right).toHaveValue('1, 2');
+  await expect(page.getByLabel('Left DIO (A, B)')).toHaveValue('2, 3');
+
+  await page.keyboard.press('Control+z');
+  await expect(page.getByRole('radio', { name: 'Head', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(left).toHaveValue('1, 2');
+});
+
 test.describe('phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
   test('has no horizontal overflow', async ({ page }) => {

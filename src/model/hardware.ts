@@ -1,4 +1,4 @@
-import type { ControllerType, EncoderType, MotorType, RobotConfig } from './types';
+import type { ControllerType, EncoderType, MotorType, RobotConfig, RobotFront } from './types';
 
 export type ControllerFamily = 'pwm' | 'ctre' | 'rev';
 
@@ -42,6 +42,43 @@ export const ENCODER_LABELS: Record<EncoderType, string> = {
 export function effectiveEncoder(robot: RobotConfig): EncoderType {
   if (robot.encoder === 'integrated' && !CONTROLLERS[robot.controller].integratedEncoder) return 'none';
   return robot.encoder;
+}
+
+/**
+ * Per-side factors from the left/right wheel balance: true wheel travel per nominal meter that the
+ * encoders count (with encoders), or the division applied to each side's voltage (without).
+ */
+export function balanceScales(balance: number): { left: number; right: number } {
+  return { left: 1 - balance / 2, right: 1 + balance / 2 };
+}
+
+export const FRONT_LABELS: Record<RobotFront, string> = {
+  head: 'Head',
+  intake: 'Intake',
+};
+
+/**
+ * The same robot driving with its other end first. Seen from behind the new front, the old right
+ * side is the new left side and turns the other way, so the motor IDs, encoder ports, inversions and
+ * the wheel balance change sides. Encoders read through a motor controller already follow the motor
+ * inversion; roboRIO encoders need their own flip.
+ */
+export function withFront(robot: RobotConfig, front: RobotFront): RobotConfig {
+  if (robot.front === front) return robot;
+  const rio = effectiveEncoder(robot) === 'rio';
+  return {
+    ...robot,
+    front,
+    wheelBalance: -robot.wheelBalance || 0,
+    leftIds: [...robot.rightIds],
+    rightIds: [...robot.leftIds],
+    invertLeft: !robot.invertRight,
+    invertRight: !robot.invertLeft,
+    leftEncoderPorts: [...robot.rightEncoderPorts],
+    rightEncoderPorts: [...robot.leftEncoderPorts],
+    invertLeftEncoder: rio ? !robot.invertRightEncoder : robot.invertRightEncoder,
+    invertRightEncoder: rio ? !robot.invertLeftEncoder : robot.invertLeftEncoder,
+  };
 }
 
 /** Wheel meters per encoder unit (rio: cycles, Talon: sensor units, SPARK MAX: motor rotations). */

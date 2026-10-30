@@ -44,6 +44,9 @@ const POSITIVE: (keyof RobotConfig)[] = [
   'encoderCPR',
 ];
 
+/** Largest left/right wheel balance accepted, as a fraction. */
+export const MAX_WHEEL_BALANCE = 0.2;
+
 function isIdList(v: unknown, length?: number): v is number[] {
   return (
     Array.isArray(v) &&
@@ -62,7 +65,10 @@ export function normalizeRobot(raw: unknown): RobotConfig {
   for (const key of Object.keys(out) as (keyof RobotConfig)[]) {
     const v = src[key];
     const fallback = out[key];
-    if (typeof fallback === 'number') {
+    if (key === 'wheelBalance') {
+      // The one signed setting: a few percent either way.
+      if (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= MAX_WHEEL_BALANCE) target[key] = v;
+    } else if (typeof fallback === 'number') {
       if (typeof v === 'number' && Number.isFinite(v) && (POSITIVE.includes(key) ? v > 0 : v >= 0)) target[key] = v;
     } else if (typeof fallback === 'boolean') {
       if (typeof v === 'boolean') target[key] = v;
@@ -73,6 +79,7 @@ export function normalizeRobot(raw: unknown): RobotConfig {
   if (typeof src.motor === 'string' && src.motor in MOTORS) out.motor = src.motor as RobotConfig['motor'];
   if (typeof src.controller === 'string' && src.controller in CONTROLLERS) out.controller = src.controller as RobotConfig['controller'];
   if (typeof src.encoder === 'string' && src.encoder in ENCODER_LABELS) out.encoder = src.encoder as RobotConfig['encoder'];
+  if (src.front === 'head' || src.front === 'intake') out.front = src.front;
   out.motorsPerSide = Math.max(1, Math.round(out.motorsPerSide));
   return out;
 }
@@ -142,8 +149,9 @@ export function normalizeSavedConfigs(raw: unknown): SavedRobotConfig[] {
     }));
 }
 
-/** A short line describing the drivetrain, e.g. "2 CIM / side · roboRIO encoders · Java". */
+/** A short line describing the drivetrain, e.g. "2 CIM / side · roboRIO encoders · Java" (plus "intake first"). */
 export function describeSettings({ robot, codegen }: RobotSettings): string {
   const encoders = robot.encoder === 'none' ? 'no encoders' : robot.encoder === 'rio' ? 'roboRIO encoders' : 'controller encoders';
-  return `${robot.motorsPerSide} ${MOTORS[robot.motor].label} / side · ${encoders} · ${codegen.language === 'java' ? 'Java' : 'Python'}`;
+  const front = robot.front === 'intake' ? ' · intake first' : '';
+  return `${robot.motorsPerSide} ${MOTORS[robot.motor].label} / side · ${encoders}${front} · ${codegen.language === 'java' ? 'Java' : 'Python'}`;
 }

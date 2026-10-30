@@ -60,6 +60,9 @@ describe('generateCode', () => {
         const autos = files.find((f) => f.path.endsWith('KopAutos.java'))!.content;
         expect(autos).toMatch(/marker\(\d+\.\d+, "Intake"\)/);
         expect(autos).toContain('KopCalibration.addTo(chooser, drive);');
+        // The wheel balance scales encoder distances, or the voltages without encoders.
+        expect(drive.includes('kLeftDistanceScale * ')).toBe(usesEncoders);
+        expect(drive.includes('leftVolts /= kLeftDistanceScale;')).toBe(!usesEncoders);
         // Balanced braces are a cheap syntax sanity check.
         for (const f of files.filter((x) => x.path.endsWith('.java'))) {
           const code = f.content.replace(/"""[\s\S]*?"""/g, '').replace(/"(?:\\.|[^"\\])*"/g, '');

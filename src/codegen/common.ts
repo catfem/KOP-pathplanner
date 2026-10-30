@@ -3,7 +3,7 @@
 
 import { TEST_DRIVE_METERS } from '../model/calibration';
 import { makeWaypoint } from '../model/defaults';
-import type { Auto, Project } from '../model/types';
+import type { Auto, Project, RobotFront } from '../model/types';
 import { type Plan, type TrajState, buildTurnSamples, planAuto } from '../planner/trajectory';
 
 export interface GeneratedFile {
@@ -205,29 +205,30 @@ export function testTrajectories(project: Project): { drive: TrajState[]; turn: 
 }
 
 /** README section shared by the Java and Python output: bringing the autos up on a real robot. */
-export function realRobotChecklist(language: 'java' | 'python', encoders: boolean): string {
+export function realRobotChecklist(language: 'java' | 'python', encoders: boolean, front: RobotFront): string {
   const java = language === 'java';
+  const frontIs = `The front is the **${front}** end (planner Robot tab).`;
   const name = (javaName: string, pythonName: string) => `\`${java ? javaName : pythonName}\``;
   const invertEncoders = `${name('kInvertLeftEncoder', 'INVERT_LEFT_ENCODER')} / ${name('kInvertRightEncoder', 'INVERT_RIGHT_ENCODER')}`;
   const invertMotors = `${name('kInvertLeft', 'INVERT_LEFT')} / ${name('kInvertRight', 'INVERT_RIGHT')}`;
   const record =
     'Write down where the front of the robot ended up against the tape: **short of** the start line or **past** it, and by how many degrees. The robot turns left (counter-clockwise seen from above).';
   const enter =
-    "In the planner, open the Robot tab, enter both results under **Calibration** and press Apply. It corrects the wheel diameter and track width together, so both tests can come from the same code. Do not also change those values by hand: that corrects them twice.";
+    "In the planner, open the Robot tab, enter the results under **Calibration** and press Apply. It corrects the wheel diameter, wheel balance and track width together, so both tests can come from the same code. Do not also change those values by hand: that corrects them twice.";
   const confirm =
     'Generate the code again, deploy, and run the two tests once more to confirm (a few cm and a couple of degrees). If the turn got worse, it was read the wrong way round: undo in the planner and enter it the other way.';
   const steps = encoders
     ? [
-        `**Directions.** With the robot disabled, roll it forward by hand (or turn the wheels forward on blocks). \`KOP/Left distance (m)\` and \`KOP/Right distance (m)\` on the dashboard must both go up; if one goes down, flip ${invertEncoders}. Then drive forward in teleop: if a side spins backwards, flip ${invertMotors} and check the encoders again.`,
+        `**Directions.** ${frontIs} With the robot disabled, roll it towards its front by hand (or turn the wheels that way on blocks). \`KOP/Left distance (m)\` and \`KOP/Right distance (m)\` on the dashboard must both go up; if one goes down, flip ${invertEncoders}. Then drive forward in teleop: the ${front} end must lead. If a side spins backwards, flip ${invertMotors} and check the encoders again.`,
         '**Test: measure feedforward** (about 1.5 m of room ahead). Enter the kS and kV it reports on the planner\'s Robot tab. Good feedforward is what makes the robot hit its marks.',
-        `**Test: drive 2 m** and **Test: turn 360°**, with the same code. Measure how far the robot really drove. Put a strip of tape along a bumper before the turn. ${record}`,
+        `**Test: drive 2 m** and **Test: turn 360°**, with the same code. Put a strip of tape along a side bumper first. After the drive, measure how far the robot really went and how far the middle of that bumper ended to the left or right of the tape (one side's wheels going a little farther per turn makes the robot curve even with encoders). Before the turn, tape a line along a bumper again. ${record}`,
         enter,
         confirm,
       ]
     : [
-        `**Directions.** Drive forward in teleop: if a side spins backwards, flip ${invertMotors}.`,
-        `**Test: drive 2 m** and **Test: turn 360°**, with the same code. Measure how far the robot really drove. Put a strip of tape along a bumper before the turn. ${record} Without encoders, good kS/kV/kA are the only thing that makes the robot hit its marks.`,
-        enter.replace('the wheel diameter and track width', 'kV and the track width'),
+        `**Directions.** ${frontIs} Drive forward in teleop: the ${front} end must lead. If a side spins backwards, flip ${invertMotors}.`,
+        `**Test: drive 2 m** and **Test: turn 360°**, with the same code. Put a strip of tape along a side bumper first. After the drive, measure how far the robot really went and how far the middle of that bumper ended to the left or right of the tape (one side's wheels going a little farther per turn makes the robot curve even with encoders). Before the turn, tape a line along a bumper again. ${record} Without encoders, good kS/kV/kA are the only thing that makes the robot hit its marks.`,
+        enter.replace('the wheel diameter, wheel balance and track width', 'kV, the wheel balance and the track width'),
         confirm,
       ];
   const problems = encoders
@@ -236,6 +237,7 @@ export function realRobotChecklist(language: 'java' | 'python', encoders: boolea
         '- **"... is not moving or its encoder is not counting"**: check the encoder cable, DIO ports or CAN ID. A thrown chain or a tripped breaker looks the same.',
         '- **"a step could not reach its target in time"**: the robot was blocked or is too weak for the plan. Lower max velocity or acceleration, or measure kS/kV (step 2).',
         '- **Turns stop short or go too far**: track width (steps 3-5).',
+        '- **Curves to one side on a straight line**: wheel balance (steps 3-5). Encoders cannot see one side\'s wheels going farther per turn.',
         '- **Worse after calibrating**: the turn was probably read the wrong way round (short of the line vs past it), or a value was corrected twice. Undo in the planner (or load your saved robot config) and enter the results again under Calibration.',
         '- **Right shape, but slower than planned**: the follower waits for a robot that falls behind instead of cutting corners. Measure kS/kV (step 2) or lower the speed limits.',
         `- **Oscillates or buzzes when it stops**: lower ${name('kP', 'KP')} and ${name('kPTurn', 'KP_TURN')}; lower ${name('kD', 'KD')} if the motors buzz while driving.`,
@@ -244,6 +246,7 @@ export function realRobotChecklist(language: 'java' | 'python', encoders: boolea
       ]
     : [
         '- **Turns stop short or go too far**: track width (steps 2-4).',
+        '- **Curves to one side on a straight line**: wheel balance (steps 2-4).',
         '- **Worse after calibrating**: the turn was probably read the wrong way round (short of the line vs past it), or a value was corrected twice. Undo in the planner and enter the results again under Calibration.',
         '- **Distances are off**: kV (steps 2-4). Encoders make a much bigger difference than any tuning; even one per side helps.',
       ];
@@ -265,6 +268,7 @@ export function headerComment(project: Project): string[] {
     'Generated by KOP Path Planner - https://github.com/catfem/KOP-pathplanner',
     `Drive: ${r.motorsPerSide} motor(s)/side, ${r.gearRatio}:1, ${num(r.wheelDiameter / 0.0254, 2)}" wheels, track width ${num(r.trackWidth, 3)} m.`,
     `Mode: ${r.encoder === 'none' ? 'open loop (time based, no sensors)' : 'encoder feedback'}, no gyro required.`,
+    `Front: the ${r.front} end leads when driving forward. Left and right are seen from behind it.`,
   ];
 }
 

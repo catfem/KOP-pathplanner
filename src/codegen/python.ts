@@ -1,7 +1,7 @@
 // Python (RobotPy commands2) code generator.
 
 import { CONTROLLERS, PWM_CLASS, effectiveEncoder, metersPerEncoderUnit } from '../model/hardware';
-import type { Project, RobotConfig } from '../model/types';
+import type { Project, RobotConfig, RobotFront } from '../model/types';
 import { FOLLOWER } from '../planner/follower';
 import {
   type GeneratedFile,
@@ -52,12 +52,21 @@ function constantsFile(project: Project): string {
 # Effective (kinematic) track width in meters. Tune this if turns over/undershoot.
 TRACK_WIDTH = ${float(r.trackWidth, 4)}
 WHEEL_DIAMETER = ${float(r.wheelDiameter, 4)}
+# How much farther the right wheels travel than the left ones for the same encoder count (without
+# encoders: for the same voltage), as a fraction. Wheel wear or a different tread makes a robot curve on
+# a straight line even with encoders. Set it from the sideways drift of the drive 2 m test auto (planner
+# Robot tab, Calibration).
+WHEEL_BALANCE = ${float(r.wheelBalance, 5)}
+# ${enc === 'none' ? "Each side's voltage is divided by these" : 'Encoder distances are multiplied by these'} to even out the sides.
+LEFT_DISTANCE_SCALE = 1.0 - WHEEL_BALANCE / 2.0
+RIGHT_DISTANCE_SCALE = 1.0 + WHEEL_BALANCE / 2.0
 # Motor rotations per wheel rotation.
 GEAR_RATIO = ${float(r.gearRatio, 4)}
 # Field width, used to mirror poses shown on the dashboard.
 FIELD_WIDTH = ${float(project.field.width, 3)}
 
 # ---- Motor controllers (${CONTROLLERS[r.controller].label}) ----
+# Left and right are seen from behind the robot's front, the ${r.front} end (planner Robot tab).
 LEFT_MOTOR_IDS = ${pyList(r.leftIds)}
 RIGHT_MOTOR_IDS = ${pyList(r.rightIds)}
 INVERT_LEFT = ${pyBool(r.invertLeft)}
@@ -781,10 +790,11 @@ function drivetrainFile(robot: RobotConfig): string {
   return `"""Ready-to-use drivetrain subsystem for the KOP chassis. No gyro is used.
 
 ${hardwareDoc}
-${encoderDoc} Before running autos, check the directions: with the robot disabled, roll it
-forward (or turn the wheels forward on blocks) and watch KOP/Left distance and KOP/Right distance
-on the dashboard. Both must go up; flip INVERT_*_ENCODER in constants.py if not. Then drive
-forward in teleop: if a side spins backwards, flip INVERT_LEFT/INVERT_RIGHT.
+${encoderDoc} Before running autos, check the directions. The front is the ${robot.front} end, and
+left and right are seen from behind it. With the robot disabled, roll it towards its front (or turn
+the wheels that way on blocks) and watch KOP/Left distance and KOP/Right distance on the dashboard.
+Both must go up; flip INVERT_*_ENCODER in constants.py if not. Then drive forward in teleop: the
+${robot.front} end must lead. If a side spins backwards, flip INVERT_LEFT/INVERT_RIGHT.
 
 Any drivetrain can run the generated autos if it provides the same methods:
 set_wheel_voltages, get_left_distance, get_right_distance, get_left_velocity,
@@ -817,7 +827,7 @@ ${init.join('\n')}
 
     def set_wheel_voltages(self, left_volts: float, right_volts: float) -> None:
         """Applies a voltage to each side. Positive drives the robot forward."""
-${setVolts.join('\n')}
+${enc === 'none' ? '        # No encoders: the wheel balance evens out the sides by voltage.\n        left_volts /= c.LEFT_DISTANCE_SCALE\n        right_volts /= c.RIGHT_DISTANCE_SCALE\n' : ''}${setVolts.join('\n')}
 
     def tank_drive_percent(self, left: float, right: float) -> None:
         """Open loop percent output per side, -1 to 1."""
@@ -839,17 +849,17 @@ ${setPercent.join('\n')}
 
     def get_left_distance(self) -> float:
         """Left wheel distance in meters, positive forward."""
-        return ${leftDist}
+        return ${enc === 'none' ? leftDist : `c.LEFT_DISTANCE_SCALE * ${leftDist}`}
 
     def get_right_distance(self) -> float:
         """Right wheel distance in meters, positive forward."""
-        return ${rightDist}
+        return ${enc === 'none' ? rightDist : `c.RIGHT_DISTANCE_SCALE * ${rightDist}`}
 
     def get_left_velocity(self) -> float:
-        return ${leftVel}
+        return ${enc === 'none' ? leftVel : `c.LEFT_DISTANCE_SCALE * ${leftVel}`}
 
     def get_right_velocity(self) -> float:
-        return ${rightVel}
+        return ${enc === 'none' ? rightVel : `c.RIGHT_DISTANCE_SCALE * ${rightVel}`}
 
     def has_encoders(self) -> bool:
         return ${pyBool(enc !== 'none')}
@@ -922,10 +932,12 @@ function calibrationFile(project: Project): string {
   // section must start from those.
   const driveReport = encoders
     ? `f"drive 2 m: the encoders measured left {left:.3f} m, right {right:.3f} m. Measure how far the robot "
-                "really went and enter it on the planner's Robot tab, under Calibration "
-                f"(this code: wheel diameter {c.WHEEL_DIAMETER:.4f} m)."`
-    : `"drive 2 m (open loop). Measure how far the robot really went and enter it on the planner's "
-                f"Robot tab, under Calibration (this code: kV {c.KV:.3f})."`;
+                "really went, and how far it ended left or right of a straight line, and enter both on the "
+                f"planner's Robot tab, under Calibration (this code: wheel diameter {c.WHEEL_DIAMETER:.4f} m, "
+                f"wheel balance {c.WHEEL_BALANCE:.4f})."`
+    : `"drive 2 m (open loop). Measure how far the robot really went, and how far it ended left or right "
+                "of a straight line, and enter both on the planner's Robot tab, under Calibration "
+                f"(this code: kV {c.KV:.3f}, wheel balance {c.WHEEL_BALANCE:.4f})."`;
   const turnReport = encoders
     ? `f"turn 360: the robot turned left (counter-clockwise); the encoders measured left {left:.3f} m, "
                 f"right {right:.3f} m (planned ${float(-halfTurn, 3)} / ${float(halfTurn, 3)} m). Check whether the front stopped short "
@@ -941,7 +953,8 @@ Station console (also on the dashboard as KOP/Test result) and enter what the ro
 the planner's Robot tab, under Calibration. Run both tests with the same code; the planner corrects
 the two settings together.
 
-- Test: drive 2 m drives straight ahead. Measure how far the robot really went.
+- Test: drive 2 m drives straight ahead. Measure how far the robot really went and how far it ended
+  to the left or right of a straight line (tape a line along a bumper first).
 - Test: turn 360° turns one full circle to the left. Put a strip of tape along a bumper first, then
   check whether the front stopped short of the start line or went past it.${
     encoders
@@ -1265,7 +1278,7 @@ ${blocks.join('\n\n')}
 `;
 }
 
-function readmeFile(autos: IRAuto[], funcNames: string[], encoders: boolean): string {
+function readmeFile(autos: IRAuto[], funcNames: string[], encoders: boolean, front: RobotFront): string {
   const commands = [...new Set(autos.flatMap((a) => a.commands))].sort();
   const register = commands.length
     ? commands.map((c) => `        named_commands.register(${quote(c)}, lambda: commands2.PrintCommand(${quote(`TODO: ${c}`)}))`).join('\n')
@@ -1330,7 +1343,7 @@ ${register}
             self.auto_command.cancel()
 \`\`\`
 
-${realRobotChecklist('python', encoders)}`;
+${realRobotChecklist('python', encoders, front)}`;
 }
 
 export function generatePython(project: Project, autos: IRAuto[]): GeneratedFile[] {
@@ -1345,6 +1358,6 @@ export function generatePython(project: Project, autos: IRAuto[]): GeneratedFile
     { path: 'kop/calibration.py', content: calibrationFile(project) },
     { path: 'kop/auto_data.py', content: autoDataFile(autos, funcNames) },
     { path: 'kop/__init__.py', content: '"""KOP Path Planner generated autos."""\n' },
-    { path: 'KOP_AUTOS_README.md', content: readmeFile(autos, funcNames, effectiveEncoder(project.robot) !== 'none') },
+    { path: 'KOP_AUTOS_README.md', content: readmeFile(autos, funcNames, effectiveEncoder(project.robot) !== 'none', project.robot.front) },
   ];
 }

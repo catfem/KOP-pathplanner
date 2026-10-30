@@ -5,7 +5,7 @@
 // the model: a weaker side, more friction, slower or heavier than configured,
 // wheel scrub, low battery, late or coarse encoder readings, or a broken encoder.
 
-import { effectiveEncoder, metersPerEncoderUnit } from '../model/hardware';
+import { balanceScales, effectiveEncoder, metersPerEncoderUnit } from '../model/hardware';
 import type { RobotConfig } from '../model/types';
 import { type EncoderFault, KopFollower, type WheelReadings } from './follower';
 import type { Plan } from './trajectory';
@@ -22,10 +22,24 @@ export interface SimSettings {
   kVScale: number;
   /** True kA relative to the configured kA (above 1: the robot is heavier than planned). */
   kAScale: number;
+  /**
+   * How much farther the right wheels really travel per rotation than the Robot tab's wheel
+   * balance says (above 1: the right wheels are bigger). Encoders count rotations, so they cannot
+   * see it.
+   */
+  wheelSizeScale: number;
 }
 
-export const PERFECT_SIM: SimSettings = { leftScale: 1, rightScale: 1, kSScale: 1, trackScale: 1, kVScale: 1, kAScale: 1 };
-export const DEFAULT_SIM: SimSettings = { leftScale: 0.95, rightScale: 1.0, kSScale: 1.15, trackScale: 1.0, kVScale: 1.05, kAScale: 1.2 };
+export const PERFECT_SIM: SimSettings = { leftScale: 1, rightScale: 1, kSScale: 1, trackScale: 1, kVScale: 1, kAScale: 1, wheelSizeScale: 1 };
+export const DEFAULT_SIM: SimSettings = {
+  leftScale: 0.95,
+  rightScale: 1.0,
+  kSScale: 1.15,
+  trackScale: 1.0,
+  kVScale: 1.05,
+  kAScale: 1.2,
+  wheelSizeScale: 1,
+};
 
 /** Hardware effects that are not settings in the UI (used by tests and the defaults below). */
 export interface PlantOptions {
@@ -128,12 +142,17 @@ export function simulatePlan(
   let fault: EncoderFault | null = null;
   let timeouts = 0;
 
+  // The plant's wheel positions are what the encoders count. The drivetrain scales them by the
+  // configured wheel balance; the real wheels travel that far, times the size error on the right.
+  const balance = balanceScales(robot.wheelBalance);
+  const trueLeft = balance.left;
+  const trueRight = balance.right * settings.wheelSizeScale;
   const quantize = (v: number) => (plant.resolution > 0 ? Math.round(v / plant.resolution) * plant.resolution : v);
   const measure = (): WheelReadings => ({
-    left: quantize(left.pos * plant.leftEncoder),
-    right: quantize(right.pos * plant.rightEncoder),
-    leftVel: left.vel * plant.leftEncoder,
-    rightVel: right.vel * plant.rightEncoder,
+    left: quantize(left.pos * plant.leftEncoder) * balance.left,
+    right: quantize(right.pos * plant.rightEncoder) * balance.right,
+    leftVel: left.vel * plant.leftEncoder * balance.left,
+    rightVel: right.vel * plant.rightEncoder * balance.right,
   });
   const history: WheelReadings[] = [];
   const read = (): WheelReadings => history[Math.max(0, history.length - 1 - plant.latencyLoops)];
@@ -151,8 +170,8 @@ export function simulatePlan(
       const scrub = plant.scrubVolts * (moving ? turnFraction(left.vel, right.vel) : turnFraction(lOut, rOut));
       stepSide(left, lOut, kS + scrub, kV, kA, h);
       stepSide(right, rOut, kS + scrub, kV, kA, h);
-      const dl = left.pos - l0;
-      const dr = right.pos - r0;
+      const dl = (left.pos - l0) * trueLeft;
+      const dr = (right.pos - r0) * trueRight;
       const dCenter = (dl + dr) / 2;
       const dTheta = (dr - dl) / trueTrack;
       x += dCenter * Math.cos(heading + dTheta / 2);
@@ -184,7 +203,9 @@ export function simulatePlan(
     for (let loop = 0; loop < 5000; loop++) {
       const out = follower.execute(dt, read());
       if (follower.finished) break;
-      integrate(out.left, out.right, CONTROL_DT);
+      // Without encoders the drivetrain applies the wheel balance to the voltages instead.
+      if (closedLoop) integrate(out.left, out.right, CONTROL_DT);
+      else integrate(out.left / balance.left, out.right / balance.right, CONTROL_DT);
       dt = CONTROL_DT;
     }
     if (follower.fault) {

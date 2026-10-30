@@ -9,7 +9,7 @@ const robot = defaultRobot();
 const plans = project.autos.map((a) => planAuto(a, robot, { commands: project.commands, field: project.field }));
 
 /** A KOP robot that is clearly not what the planner assumed. */
-const realKop = { leftScale: 0.92, rightScale: 1, kSScale: 1.4, trackScale: 1, kVScale: 1.15, kAScale: 1.5 };
+const realKop = { leftScale: 0.92, rightScale: 1, kSScale: 1.4, trackScale: 1, kVScale: 1.15, kAScale: 1.5, wheelSizeScale: 1 };
 const realHardware = { scrubVolts: 2, supplyVolts: 11, latencyLoops: 1 };
 
 describe('KopFollower on a real-world robot', () => {
@@ -34,7 +34,7 @@ describe('KopFollower on a real-world robot', () => {
 
   it('keeps a mismatched robot on the path where open loop wanders off', () => {
     // Errors can cancel out by the end of an auto, so judge by the whole path, not just the end.
-    const settings = { leftScale: 0.9, rightScale: 1, kSScale: 1.3, trackScale: 1, kVScale: 1.15, kAScale: 1.5 };
+    const settings = { leftScale: 0.9, rightScale: 1, kSScale: 1.3, trackScale: 1, kVScale: 1.15, kAScale: 1.5, wheelSizeScale: 1 };
     for (const plan of plans) {
       const open = simulatePlan(plan, { ...robot, encoder: 'none' }, settings);
       const closed = simulatePlan(plan, robot, settings);

@@ -18,6 +18,7 @@ function Slider({ label, value, min, max, step, onChange, format }: { label: str
 }
 
 const pct = (v: number) => `${v >= 1 ? '+' : ''}${((v - 1) * 100).toFixed(0)}%`;
+const finePct = (v: number) => `${v >= 1 ? '+' : ''}${((v - 1) * 100).toFixed(1)}%`;
 
 const positionClass = (m: number) => (m > 0.3 ? 'bad' : m > 0.1 ? 'meh' : 'good');
 const headingClass = (deg: number) => (Math.abs(deg) > 10 ? 'bad' : Math.abs(deg) > 3 ? 'meh' : 'good');
@@ -118,11 +119,21 @@ export function SimPanel({ sim, comparison }: { sim: SimResult | null; compariso
           format={pct}
           onChange={(v) => set({ trackScale: v })}
         />
+        <Slider
+          label="Right wheels bigger than set (wheel balance)"
+          value={settings.wheelSizeScale}
+          min={0.97}
+          max={1.03}
+          step={0.001}
+          format={finePct}
+          onChange={(v) => set({ wheelSizeScale: v })}
+        />
         <p className="muted small">
           These sliders only describe how the real robot differs from the Robot tab; they never change the generated code. With
-          encoders, the follower waits for a slow or heavy robot instead of cutting corners, so those errors mostly cost time. Wheel scrub
-          is the one error encoders cannot see: calibrate the track width with the generated &ldquo;Test: turn 360°&rdquo; auto and the
-          Calibration section on the Robot tab, then set Wheel scrub back to 0% here so it is not counted twice.
+          encoders, the follower corrects a weaker side and waits for a slow or heavy robot, so those errors mostly cost time. Encoders
+          count wheel rotations, so they cannot see wheel scrub or one side&apos;s wheels going farther per turn: calibrate the track width
+          and wheel balance with the generated &ldquo;Test: turn 360°&rdquo; and &ldquo;Test: drive 2 m&rdquo; autos and the Calibration
+          section on the Robot tab, then set those two sliders back to 0% here so they are not counted twice.
         </p>
         <div className="button-row">
           <button type="button" className="btn small" onClick={() => setUi({ sim: DEFAULT_SIM })}>

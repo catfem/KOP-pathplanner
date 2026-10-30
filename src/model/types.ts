@@ -73,7 +73,16 @@ export type ControllerType =
  */
 export type EncoderType = 'none' | 'rio' | 'integrated';
 
+/** The two ends of the robot. 'head' is the end it was first set up to drive towards. */
+export type RobotFront = 'head' | 'intake';
+
 export interface RobotConfig {
+  /**
+   * The robot's front: the end that leads when driving forward, aims at a HUB and touches it.
+   * Left/right, motor IDs, encoder ports and inversions are always seen from behind the front, so
+   * switching ends swaps them (`withFront`).
+   */
+  front: RobotFront;
   /** Bumper-to-bumper length along the direction of travel, m. */
   length: number;
   /** Bumper-to-bumper width, m. */
@@ -81,6 +90,13 @@ export interface RobotConfig {
   /** Effective (kinematic) track width used for turning math, m. */
   trackWidth: number;
   wheelDiameter: number;
+  /**
+   * How much farther the right wheels travel than the left ones for the same encoder count
+   * (without encoders: for the same voltage), as a fraction: 0.01 = 1% farther. Wheel wear or a
+   * different tread makes a robot curve on a straight line even with encoders, which only count
+   * rotations. Set from the sideways drift in "Test: drive 2 m".
+   */
+  wheelBalance: number;
   /** Motor rotations per wheel rotation. */
   gearRatio: number;
   motor: MotorType;

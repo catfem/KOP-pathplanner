@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { INCH, MOTORS, estimateFeedforward, freeSpeed } from '../../model/defaults';
-import { CONTROLLERS, DRIVETRAIN_PRESETS, ENCODER_LABELS, effectiveEncoder, motorControllerIssue } from '../../model/hardware';
+import { CONTROLLERS, DRIVETRAIN_PRESETS, ENCODER_LABELS, FRONT_LABELS, effectiveEncoder, motorControllerIssue, withFront } from '../../model/hardware';
 import { showToast, updateProject, useStore } from '../../model/store';
-import type { ControllerType, EncoderType, Language, MotorType, RobotConfig } from '../../model/types';
-import { Checkbox, IntListField, NumberField, Section, SelectField, TextField } from '../components/controls';
+import type { ControllerType, EncoderType, Language, MotorType, RobotConfig, RobotFront } from '../../model/types';
+import { Checkbox, IntListField, NumberField, Section, Segmented, SelectField, TextField } from '../components/controls';
+import { MAX_WHEEL_BALANCE } from '../../model/robotConfigs';
 import { CalibrationSection } from './CalibrationSection';
 import { RobotConfigs } from './RobotConfigs';
 
@@ -31,6 +32,15 @@ export function RobotPanel() {
     });
     showToast(`${preset.label}: applied, with kV/kA estimated for a ${mass} kg robot.`);
   };
+  const setFront = (front: RobotFront) => {
+    if (front === robot.front) return;
+    updateProject((p) => {
+      p.robot = withFront(p.robot, front);
+    });
+    showToast(
+      `The ${FRONT_LABELS[front].toLowerCase()} end is now the front. Left and right motor IDs, encoder ports, inversions and the wheel balance were swapped to match: generate the code again and deploy it.`,
+    );
+  };
 
   return (
     <div className="panel-scroll">
@@ -48,6 +58,19 @@ export function RobotPanel() {
       </Section>
 
       <Section title="Chassis">
+        <div className="field">
+          <span className="field-label">Front of the robot</span>
+          <Segmented<RobotFront>
+            label="Front of the robot"
+            value={robot.front}
+            onChange={setFront}
+            options={(Object.keys(FRONT_LABELS) as RobotFront[]).map((f) => ({ value: f, label: FRONT_LABELS[f] }))}
+          />
+          <div className="hint">
+            The end that leads when driving forward, aims at a HUB and touches it. Switching makes the code drive the other end first
+            without rewiring: left and right (seen from behind the front) swap their motor IDs, encoder ports and inversions.
+          </div>
+        </div>
         <div className="grid-2">
           <NumberField label="Length (bumpers)" unit="m" value={robot.length} min={0.3} step={0.01} onChange={(v) => set('length', v)} />
           <NumberField label="Width (bumpers)" unit="m" value={robot.width} min={0.3} step={0.01} onChange={(v) => set('width', v)} />
@@ -65,6 +88,17 @@ export function RobotPanel() {
           <NumberField label="Wheel diameter" unit="in" value={robot.wheelDiameter / INCH} min={1} step={0.25} decimals={2} onChange={(v) => set('wheelDiameter', v * INCH)} />
           <NumberField label="Gear ratio" unit=": 1" value={robot.gearRatio} min={1} step={0.01} decimals={2} onChange={(v) => set('gearRatio', v)} />
         </div>
+        <NumberField
+          label="Wheel balance (right vs left)"
+          unit="%"
+          value={robot.wheelBalance * 100}
+          min={-MAX_WHEEL_BALANCE * 100}
+          max={MAX_WHEEL_BALANCE * 100}
+          step={0.1}
+          decimals={2}
+          onChange={(v) => set('wheelBalance', v / 100)}
+          hint="How much farther the right wheels travel than the left ones per turn. Set it from the sideways drift of “Test: drive 2 m” under Calibration."
+        />
         <div className="grid-2">
           <SelectField<MotorType>
             label="Motor"

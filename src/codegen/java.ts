@@ -1,7 +1,7 @@
 // Java (WPILib command-based) code generator.
 
 import { CONTROLLERS, PWM_CLASS, effectiveEncoder, metersPerEncoderUnit } from '../model/hardware';
-import type { Project, RobotConfig } from '../model/types';
+import type { Project, RobotConfig, RobotFront } from '../model/types';
 import { FOLLOWER } from '../planner/follower';
 import {
   type GeneratedFile,
@@ -62,12 +62,25 @@ public final class KopDriveConstants {
   /** Effective (kinematic) track width in meters. Tune this if turns over/undershoot. */
   public static final double kTrackWidthMeters = ${float(r.trackWidth, 4)};
   public static final double kWheelDiameterMeters = ${float(r.wheelDiameter, 4)};
+  /**
+   * How much farther the right wheels travel than the left ones for the same encoder count
+   * (without encoders: for the same voltage), as a fraction. Wheel wear or a different tread makes
+   * a robot curve on a straight line even with encoders. Set it from the sideways drift of the drive
+   * 2 m test auto (planner Robot tab, Calibration).
+   */
+  public static final double kWheelBalance = ${float(r.wheelBalance, 5)};
+  /**
+   * ${enc === 'none' ? "Each side's voltage is divided by these" : 'Encoder distances are multiplied by these'} to even out the sides.
+   */
+  public static final double kLeftDistanceScale = 1.0 - kWheelBalance / 2.0;
+  public static final double kRightDistanceScale = 1.0 + kWheelBalance / 2.0;
   /** Motor rotations per wheel rotation. */
   public static final double kGearRatio = ${float(r.gearRatio, 4)};
   /** Field width, used to mirror poses shown on the dashboard. */
   public static final double kFieldWidthMeters = ${float(project.field.width, 3)};
 
   // ---- Motor controllers (${CONTROLLERS[r.controller].label}) ----
+  /** Left and right are seen from behind the robot's front, the ${r.front} end (planner Robot tab). */
   public static final int[] kLeftMotorIds = ${intArray(r.leftIds)};
   public static final int[] kRightMotorIds = ${intArray(r.rightIds)};
   public static final boolean kInvertLeft = ${bool(r.invertLeft)};
@@ -1073,11 +1086,11 @@ ${importLines.join('\n')}
  *
  * <p>${hardwareDoc}
  *
- * <p>${encoderDoc} Before running autos, check the directions: with the robot disabled, roll it
- * forward (or turn the wheels forward on blocks) and watch KOP/Left distance and KOP/Right
- * distance on the dashboard. Both must
- * go up; flip kInvert*Encoder in KopDriveConstants if not. Then drive forward in teleop: if a side
- * spins backwards, flip kInvertLeft/kInvertRight.
+ * <p>${encoderDoc} Before running autos, check the directions. The front is the ${robot.front} end,
+ * and left and right are seen from behind it. With the robot disabled, roll it towards its front
+ * (or turn the wheels that way on blocks) and watch KOP/Left distance and KOP/Right distance on the
+ * dashboard. Both must go up; flip kInvert*Encoder in KopDriveConstants if not. Then drive forward
+ * in teleop: the ${robot.front} end must lead. If a side spins backwards, flip kInvertLeft/kInvertRight.
  */
 public class KopDrivetrain extends SubsystemBase implements KopDrive {
 ${fields.join('\n')}
@@ -1097,7 +1110,7 @@ ${init.join('\n')}
 
   @Override
   public void setWheelVoltages(double leftVolts, double rightVolts) {
-${setVolts.join('\n')}
+${enc === 'none' ? '    // No encoders: the wheel balance evens out the sides by voltage.\n    leftVolts /= kLeftDistanceScale;\n    rightVolts /= kRightDistanceScale;\n' : ''}${setVolts.join('\n')}
   }
 
   /** Open loop percent output per side, -1 to 1. */
@@ -1123,22 +1136,22 @@ ${setPercent.join('\n')}
 
   @Override
   public double getLeftDistanceMeters() {
-    return ${leftDist};
+    return ${enc === 'none' ? leftDist : `kLeftDistanceScale * ${leftDist}`};
   }
 
   @Override
   public double getRightDistanceMeters() {
-    return ${rightDist};
+    return ${enc === 'none' ? rightDist : `kRightDistanceScale * ${rightDist}`};
   }
 
   @Override
   public double getLeftVelocityMetersPerSecond() {
-    return ${leftVel};
+    return ${enc === 'none' ? leftVel : `kLeftDistanceScale * ${leftVel}`};
   }
 
   @Override
   public double getRightVelocityMetersPerSecond() {
-    return ${rightVel};
+    return ${enc === 'none' ? rightVel : `kRightDistanceScale * ${rightVel}`};
   }
 
   @Override
@@ -1240,11 +1253,13 @@ function testsFile(pkg: string, project: Project): string {
   // section must start from those.
   const driveAdvice = encoders
     ? `"drive 2 m: the encoders measured left %.3f m, right %.3f m. Measure how far the robot"
-                              + " really went and enter it on the planner's Robot tab, under Calibration"
-                              + " (this code: wheel diameter %.4f m)."`
-    : `"drive 2 m (open loop). Measure how far the robot really went and enter it on the"
-                              + " planner's Robot tab, under Calibration (this code: kV %.3f)."`;
-  const driveArgs = encoders ? 'left, right, kWheelDiameterMeters' : 'kV';
+                              + " really went, and how far it ended left or right of a straight line, and"
+                              + " enter both on the planner's Robot tab, under Calibration (this code:"
+                              + " wheel diameter %.4f m, wheel balance %.4f)."`
+    : `"drive 2 m (open loop). Measure how far the robot really went, and how far it ended"
+                              + " left or right of a straight line, and enter both on the planner's Robot"
+                              + " tab, under Calibration (this code: kV %.3f, wheel balance %.4f)."`;
+  const driveArgs = encoders ? 'left, right, kWheelDiameterMeters, kWheelBalance' : 'kV, kWheelBalance';
   const turnAdvice = encoders
     ? `"turn 360: the robot turned left (counter-clockwise); the encoders measured left %.3f m,"
                               + " right %.3f m (planned ${float(-halfTurn, 3)} / ${float(halfTurn, 3)} m). Check whether the front stopped"
@@ -1274,7 +1289,8 @@ import edu.wpi.first.wpilibj2.command.Commands;
  * both tests with the same code; the planner corrects the two settings together.
  *
  * <ul>
- *   <li><b>Test: drive 2 m</b> drives straight ahead. Measure how far the robot really went.
+ *   <li><b>Test: drive 2 m</b> drives straight ahead. Measure how far the robot really went and how
+ *       far it ended to the left or right of a straight line (tape a line along a bumper first).
  *   <li><b>Test: turn 360</b> turns one full circle to the left. Put a strip of tape along a bumper
  *       first, then check whether the front stopped short of the start line or went past it.${
     encoders
@@ -1668,7 +1684,7 @@ ${dataBlocks.join('\n\n')}
 `;
 }
 
-function readmeFile(pkg: string, autos: IRAuto[], methodNames: string[], pwmOnly: boolean, encoders: boolean): string {
+function readmeFile(pkg: string, autos: IRAuto[], methodNames: string[], pwmOnly: boolean, encoders: boolean, front: RobotFront): string {
   const commands = [...new Set(autos.flatMap((a) => a.commands))].sort();
   const register = commands.length
     ? commands.map((c) => `    KopNamedCommands.register(${quote(c)}, () -> Commands.print(${quote(`TODO: ${c}`)}));`).join('\n')
@@ -1727,7 +1743,7 @@ ${register}
 }
 \`\`\`
 
-${realRobotChecklist('java', encoders)}`;
+${realRobotChecklist('java', encoders, front)}`;
 }
 
 export function generateJava(project: Project, autos: IRAuto[]): GeneratedFile[] {
@@ -1743,6 +1759,6 @@ export function generateJava(project: Project, autos: IRAuto[]): GeneratedFile[]
     { path: `${dir}/KopTrajectory.java`, content: trajectoryFile(pkg) },
     { path: `${dir}/KopNamedCommands.java`, content: namedCommandsFile(pkg) },
     { path: `${dir}/KopCalibration.java`, content: testsFile(pkg, project) },
-    { path: 'KOP_AUTOS_README.md', content: readmeFile(pkg, autos, methodNames, CONTROLLERS[project.robot.controller].family === 'pwm', effectiveEncoder(project.robot) !== 'none') },
+    { path: 'KOP_AUTOS_README.md', content: readmeFile(pkg, autos, methodNames, CONTROLLERS[project.robot.controller].family === 'pwm', effectiveEncoder(project.robot) !== 'none', project.robot.front) },
   ];
 }
