@@ -137,8 +137,8 @@ how far it ended to the left or right of a straight line, and whether the turn s
 the start line or went past it. The sideways drift sets the **wheel balance**: encoders count
 rotations, so if one side's wheels go a little farther per turn (tread wear, a different tyre) the
 robot curves on a straight line even though both encoders agree. A 1% difference is about 3 cm
-of drift over 2 m; the balance scales each side's encoder distance (or, without encoders, its
-voltage) to cancel it. The two tests depend on
+of drift over 2 m; the follower scales each side's encoder distance (or, without encoders, its
+voltage) by the balance to cancel it, so it also works with your own drivetrain. The two tests depend on
 each other (the turn is measured with the wheel diameter the code was generated with), so the
 planner corrects the wheel diameter, the track width and kV/kA together from one run of both
 tests. Fixing them one at a time from the same run, or reading the turn the wrong way round,
@@ -150,7 +150,7 @@ again.
 | Java (`src/main/java/frc/robot/kop/`) | Python (`kop/`) | Purpose |
 | --- | --- | --- |
 | `KopDriveConstants.java` | `constants.py` | Measurements, IDs, gains |
-| `KopDrive.java` | — (duck typing) | Interface the autos drive through |
+| `KopDrive.java` | — (duck typing) | Interface the autos drive through. Your own drivetrain can implement it: return plain encoder distances, the autos apply the wheel balance |
 | `KopDrivetrain.java` | `drive.py` | Ready-made drivetrain subsystem with teleop arcade drive and encoder odometry |
 | `KopTrajectory.java` | `trajectory.py` | Sampled wheel trajectories with interpolation |
 | `FollowKopTrajectory.java` | `follow.py` | Gyro-less trajectory follower command |

@@ -60,9 +60,15 @@ describe('generateCode', () => {
         const autos = files.find((f) => f.path.endsWith('KopAutos.java'))!.content;
         expect(autos).toMatch(/marker\(\d+\.\d+, "Intake"\)/);
         expect(autos).toContain('KopCalibration.addTo(chooser, drive);');
-        // The wheel balance scales encoder distances, or the voltages without encoders.
-        expect(drive.includes('kLeftDistanceScale * ')).toBe(usesEncoders);
-        expect(drive.includes('leftVolts /= kLeftDistanceScale;')).toBe(!usesEncoders);
+        // The follower applies the wheel balance (to encoder distances, or to the voltages without
+        // encoders), so it works with any KopDrive; the drivetrain reports plain encoder readings.
+        expect(drive).not.toContain('DistanceScale');
+        const follower = files.find((f) => f.path.endsWith('FollowKopTrajectory.java'))!.content;
+        expect(follower).toContain('kLeftDistanceScale * drive.getLeftDistanceMeters()');
+        expect(follower).toContain('kRightDistanceScale * drive.getRightVelocityMetersPerSecond()');
+        expect(follower).toContain('balanceByVoltage = !(kUseEncoders && drive.hasEncoders());');
+        expect(follower).toContain('robotLeft /= kLeftDistanceScale;');
+        expect(calibration).toContain('kLeftDistanceScale * drive.getLeftDistanceMeters()');
         // Balanced braces are a cheap syntax sanity check.
         for (const f of files.filter((x) => x.path.endsWith('.java'))) {
           const code = f.content.replace(/"""[\s\S]*?"""/g, '').replace(/"(?:\\.|[^"\\])*"/g, '');

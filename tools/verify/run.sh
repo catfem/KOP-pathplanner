@@ -5,8 +5,8 @@
 #   3. runs FollowKopTrajectory (Java) against drivetrain plants that do not match the constants
 #      (weaker side, heavier and slower, tread scrub, an encoder wired backwards),
 #   4. constructs every Python variant with the real RobotPy + vendor libraries and runs the
-#      PWM variants through a whole auto, the calibration tests and an encoder fault in the
-#      RobotPy simulator.
+#      PWM variants through a whole auto, the calibration tests, an encoder fault and a wheel
+#      size difference in the RobotPy simulator.
 # Needs: node, a JDK (17+), and python with robotpy, robotpy-commands-v2, robotpy-rev, robotpy-ctre.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -46,8 +46,8 @@ echo "== Running Python in the RobotPy simulator"
 for dir in "$OUT"/gen/python/*/; do
   variant="$(basename "$dir")"
   case "$variant" in
-    pwm-*_rio) modes="run calibrate fault" ;;
-    pwm-*) modes="run calibrate" ;;
+    pwm-*_rio) modes="run calibrate fault balance" ;;
+    pwm-*) modes="run calibrate balance" ;;
     *) modes="construct" ;;
   esac
   for mode in $modes; do

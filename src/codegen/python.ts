@@ -57,7 +57,8 @@ WHEEL_DIAMETER = ${float(r.wheelDiameter, 4)}
 # a straight line even with encoders. Set it from the sideways drift of the drive 2 m test auto (planner
 # Robot tab, Calibration).
 WHEEL_BALANCE = ${float(r.wheelBalance, 5)}
-# ${enc === 'none' ? "Each side's voltage is divided by these" : 'Encoder distances are multiplied by these'} to even out the sides.
+# The autos even out the sides with these: follow.py multiplies each side's encoder distance and speed
+# by them (without encoders: divides each side's voltage), so this works with your own drivetrain too.
 LEFT_DISTANCE_SCALE = 1.0 - WHEEL_BALANCE / 2.0
 RIGHT_DISTANCE_SCALE = 1.0 + WHEEL_BALANCE / 2.0
 # Motor rotations per wheel rotation.
@@ -346,6 +347,8 @@ class FollowKopTrajectory(commands2.Command):
 
     def initialize(self):
         self.closed_loop = c.USE_ENCODERS and self.drive.has_encoders() and _encoder_fault is None
+        # No encoders on this drivetrain: the wheel balance is applied to the voltages.
+        self.balance_by_voltage = not (c.USE_ENCODERS and self.drive.has_encoders())
         self.mirrored = bool(self.mirror())
         self.finished = False
         self.started = False
@@ -372,8 +375,8 @@ class FollowKopTrajectory(commands2.Command):
         self.left_boost = 0.0
         self.right_boost = 0.0
         self.turn_integral = 0.0
-        self.left_start = self.drive.get_left_distance()
-        self.right_start = self.drive.get_right_distance()
+        self.left_start = c.LEFT_DISTANCE_SCALE * self.drive.get_left_distance()
+        self.right_start = c.RIGHT_DISTANCE_SCALE * self.drive.get_right_distance()
         self.sp = self.trajectory.sample(0.0)
         self.odom_x, self.odom_y, self.odom_heading = self.sp.x, self.sp.y, self.sp.heading
         self.last_left = 0.0
@@ -404,11 +407,12 @@ class FollowKopTrajectory(commands2.Command):
                 self._finish()
             return
 
-        # Everything below works in the trajectory's frame; a mirrored path swaps the sides.
-        left = self.drive.get_left_distance() - self.left_start
-        right = self.drive.get_right_distance() - self.right_start
-        left_vel = self.drive.get_left_velocity()
-        right_vel = self.drive.get_right_velocity()
+        # The wheel balance evens out the sides. Everything below works in the trajectory's frame;
+        # a mirrored path swaps the sides.
+        left = c.LEFT_DISTANCE_SCALE * self.drive.get_left_distance() - self.left_start
+        right = c.RIGHT_DISTANCE_SCALE * self.drive.get_right_distance() - self.right_start
+        left_vel = c.LEFT_DISTANCE_SCALE * self.drive.get_left_velocity()
+        right_vel = c.RIGHT_DISTANCE_SCALE * self.drive.get_right_velocity()
         if self.mirrored:
             left, right = right, left
             left_vel, right_vel = right_vel, left_vel
@@ -497,11 +501,15 @@ class FollowKopTrajectory(commands2.Command):
         self.last_left_volts = left_volts
         self.last_right_volts = right_volts
         sp = self.sp
+        robot_left, robot_right = (right_volts, left_volts) if self.mirrored else (left_volts, right_volts)
+        if self.balance_by_voltage:
+            # No encoders: the wheel balance evens out the sides by voltage.
+            robot_left /= c.LEFT_DISTANCE_SCALE
+            robot_right /= c.RIGHT_DISTANCE_SCALE
+        self.drive.set_wheel_voltages(robot_left, robot_right)
         if self.mirrored:
-            self.drive.set_wheel_voltages(right_volts, left_volts)
             self.drive.set_target_pose(sp.x, c.FIELD_WIDTH - sp.y, -sp.heading)
         else:
-            self.drive.set_wheel_voltages(left_volts, right_volts)
             self.drive.set_target_pose(sp.x, sp.y, sp.heading)
 
     def _check_encoders(self, left: float, right: float, dt: float) -> bool:
@@ -798,7 +806,8 @@ ${robot.front} end must lead. If a side spins backwards, flip INVERT_LEFT/INVERT
 
 Any drivetrain can run the generated autos if it provides the same methods:
 set_wheel_voltages, get_left_distance, get_right_distance, get_left_velocity,
-get_right_velocity, has_encoders, reset_pose, set_target_pose and stop_drive.
+get_right_velocity, has_encoders, reset_pose, set_target_pose and stop_drive. Return the plain
+encoder distances and speeds: the autos apply WHEEL_BALANCE themselves.
 """
 
 ${importBlock}
@@ -827,7 +836,7 @@ ${init.join('\n')}
 
     def set_wheel_voltages(self, left_volts: float, right_volts: float) -> None:
         """Applies a voltage to each side. Positive drives the robot forward."""
-${enc === 'none' ? '        # No encoders: the wheel balance evens out the sides by voltage.\n        left_volts /= c.LEFT_DISTANCE_SCALE\n        right_volts /= c.RIGHT_DISTANCE_SCALE\n' : ''}${setVolts.join('\n')}
+${setVolts.join('\n')}
 
     def tank_drive_percent(self, left: float, right: float) -> None:
         """Open loop percent output per side, -1 to 1."""
@@ -849,17 +858,17 @@ ${setPercent.join('\n')}
 
     def get_left_distance(self) -> float:
         """Left wheel distance in meters, positive forward."""
-        return ${enc === 'none' ? leftDist : `c.LEFT_DISTANCE_SCALE * ${leftDist}`}
+        return ${leftDist}
 
     def get_right_distance(self) -> float:
         """Right wheel distance in meters, positive forward."""
-        return ${enc === 'none' ? rightDist : `c.RIGHT_DISTANCE_SCALE * ${rightDist}`}
+        return ${rightDist}
 
     def get_left_velocity(self) -> float:
-        return ${enc === 'none' ? leftVel : `c.LEFT_DISTANCE_SCALE * ${leftVel}`}
+        return ${leftVel}
 
     def get_right_velocity(self) -> float:
-        return ${enc === 'none' ? rightVel : `c.RIGHT_DISTANCE_SCALE * ${rightVel}`}
+        return ${rightVel}
 
     def has_encoders(self) -> bool:
         return ${pyBool(enc !== 'none')}
@@ -993,16 +1002,33 @@ def _report(message: str) -> None:
     wpilib.SmartDashboard.putString("KOP/Test result", message)
 
 
+def _left_meters(drive) -> float:
+    """Wheel distances and speeds evened out by the wheel balance, as the follower sees them."""
+    return c.LEFT_DISTANCE_SCALE * drive.get_left_distance()
+
+
+def _right_meters(drive) -> float:
+    return c.RIGHT_DISTANCE_SCALE * drive.get_right_distance()
+
+
+def _left_speed(drive) -> float:
+    return c.LEFT_DISTANCE_SCALE * drive.get_left_velocity()
+
+
+def _right_speed(drive) -> float:
+    return c.RIGHT_DISTANCE_SCALE * drive.get_right_velocity()
+
+
 def _measured_test(drive, trajectory, name: str, report) -> commands2.Command:
     start = [0.0, 0.0]
 
     def begin():
-        start[0] = drive.get_left_distance()
-        start[1] = drive.get_right_distance()
+        start[0] = _left_meters(drive)
+        start[1] = _right_meters(drive)
         drive.reset_pose(0.0, 0.0, 0.0)
 
     def finish():
-        _report(report(drive.get_left_distance() - start[0], drive.get_right_distance() - start[1]))
+        _report(report(_left_meters(drive) - start[0], _right_meters(drive) - start[1]))
 
     return commands2.SequentialCommandGroup(
         commands2.InstantCommand(begin),
@@ -1109,16 +1135,16 @@ class MeasureFeedforward(commands2.Command):
         self.right.clear()
         self.phase = 0
         self.phase_start = 0.0
-        self.left_start = self.drive.get_left_distance()
-        self.right_start = self.drive.get_right_distance()
+        self.left_start = _left_meters(self.drive)
+        self.right_start = _right_meters(self.drive)
         self.timer.restart()
 
     def execute(self):
         now = self.timer.get()
         t = now - self.phase_start
         travelled = max(
-            abs(self.drive.get_left_distance() - self.left_start),
-            abs(self.drive.get_right_distance() - self.right_start),
+            abs(_left_meters(self.drive) - self.left_start),
+            abs(_right_meters(self.drive) - self.right_start),
         )
         volts = 0.0
         if self.phase == 0:
@@ -1140,8 +1166,8 @@ class MeasureFeedforward(commands2.Command):
                 volts = 0.0
         self.drive.set_wheel_voltages(volts, volts)
         if volts != 0.0:
-            self.left.add(volts, self.drive.get_left_velocity())
-            self.right.add(volts, self.drive.get_right_velocity())
+            self.left.add(volts, _left_speed(self.drive))
+            self.right.add(volts, _right_speed(self.drive))
 
     def isFinished(self) -> bool:
         return self.phase == 3
