@@ -54,8 +54,9 @@ controller encoders, or no sensors at all.
 - Projects autosave in the browser and can be saved/opened as files. PathPlanner `.path` files
   can be imported.
 - **Auto files**: export one auto (the download button in the autos list, or Project → Export
-  this auto) or all of them as a `.zip`, and import them into any project with Project → Import
-  autos (several files at once, or every auto of a project file). An auto file carries the named
+  this auto) or all of them as a `.zip`, and import them into any project: the import button at
+  the top of the autos list, dropping the files onto the list, or Project → Import autos
+  (several files at once, or every auto of a project file). An auto file carries the named
   commands it uses; clashing names get a number, and a different field size or a missing HUB is
   pointed out.
 - **Saved robot configs**: keep the robot settings (drivetrain, IDs, gains, calibration and

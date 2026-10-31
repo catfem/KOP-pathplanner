@@ -17,7 +17,11 @@ export function exportAllAutos(): void {
 
 /** Asks for auto files (or project files) and adds their autos to the project. */
 export async function importAutos(): Promise<void> {
-  const picked = await pickFiles('.json,.auto.json,.kop.json,application/json');
+  await importAutoFileList(await pickFiles('.json,.auto.json,.kop.json,application/json'));
+}
+
+/** Adds the autos in these auto files (or project files) to the project. Throws when none has any. */
+export async function importAutoFileList(picked: File[]): Promise<void> {
   if (picked.length === 0) return;
   const files = await Promise.all(
     picked.map(async (f) => {
