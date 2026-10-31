@@ -1,11 +1,22 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { makeWaypoint, newId } from '../../model/defaults';
 import { duplicateAuto, uniqueAutoName } from '../../model/edit';
-import { getState, setUi, updateProject, useStore } from '../../model/store';
+import { getState, setUi, showToast, updateProject, useStore } from '../../model/store';
 import { confirmAction } from '../components/Confirm';
 import { IconButton, NumberField } from '../components/controls';
-import { IconDownload, IconDuplicate, IconPlus, IconTrash, IconX } from '../components/icons';
-import { exportAuto } from '../lib/autoFiles';
+import { IconDownload, IconDuplicate, IconPlus, IconTrash, IconUpload, IconX } from '../components/icons';
+import { exportAuto, importAutoFileList, importAutos } from '../lib/autoFiles';
+
+/** Runs an import and reports a bad file as a toast. */
+async function reportingErrors(run: () => Promise<void>): Promise<void> {
+  try {
+    await run();
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : String(err), 'error');
+  }
+}
+
+const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
 
 export function Sidebar() {
   const autos = useStore((s) => s.project.autos);
@@ -13,6 +24,9 @@ export function Sidebar() {
   const selectedId = useStore((s) => s.ui.selectedAutoId);
   const fieldWidth = useStore((s) => s.project.field.width);
   const [newCommand, setNewCommand] = useState('');
+  // Drag enter/leave fire for every child element: count them to know when the files left.
+  const dragDepth = useRef(0);
+  const [dropping, setDropping] = useState(false);
 
   const usage = (name: string) =>
     autos.reduce(
@@ -43,12 +57,44 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar" aria-label="Autos and commands">
-      <div className="side-section">
+      <div
+        className={`side-section${dropping ? ' drop-target' : ''}`}
+        role="group"
+        aria-label="Autos"
+        onDragEnter={(e) => {
+          if (!hasFiles(e)) return;
+          e.preventDefault();
+          dragDepth.current += 1;
+          setDropping(true);
+        }}
+        onDragOver={(e) => {
+          if (!hasFiles(e)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+        }}
+        onDragLeave={() => {
+          dragDepth.current = Math.max(0, dragDepth.current - 1);
+          if (dragDepth.current === 0) setDropping(false);
+        }}
+        onDrop={(e) => {
+          if (!hasFiles(e)) return;
+          e.preventDefault();
+          dragDepth.current = 0;
+          setDropping(false);
+          const files = Array.from(e.dataTransfer.files);
+          void reportingErrors(() => importAutoFileList(files));
+        }}
+      >
         <div className="side-head">
           <h2>Autos</h2>
-          <IconButton title="New auto" onClick={addAuto}>
-            <IconPlus />
-          </IconButton>
+          <div className="side-head-actions">
+            <IconButton title="Import autos from files (or drop them here)" onClick={() => void reportingErrors(importAutos)}>
+              <IconUpload />
+            </IconButton>
+            <IconButton title="New auto" onClick={addAuto}>
+              <IconPlus />
+            </IconButton>
+          </div>
         </div>
         <ul className="auto-list">
           {autos.map((a) => (
@@ -113,6 +159,7 @@ export function Sidebar() {
             </li>
           ))}
         </ul>
+        {dropping && <p className="drop-hint">Drop auto files (.auto.json) or project files to import their autos.</p>}
       </div>
 
       <div className="side-section">

@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { type Page, expect, test } from '@playwright/test';
 
 const FIELD = { length: 16.541, width: 8.069 };
@@ -410,6 +410,35 @@ test('autos export as files and import into a project', async ({ page }, testInf
   await again.setFiles(robotFile);
   await expect(page.getByText('robot.json has no autos')).toBeVisible();
   await expect(list.locator('li')).toHaveCount(3);
+});
+
+test('the autos list imports with its button and by dropping files on it', async ({ page }, testInfo) => {
+  const list = page.locator('.auto-list');
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    list.getByRole('button', { name: 'Export “Two Piece” as a file' }).click(),
+  ]);
+  const file = testInfo.outputPath('two-piece.auto.json');
+  await download.saveAs(file);
+
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: /^Import autos from files/ }).click()]);
+  expect(chooser.isMultiple()).toBe(true);
+  await chooser.setFiles(file);
+  await expect(list.locator('li.active .auto-name')).toHaveText('Two Piece 2');
+
+  // Drop the same file on the list: the list shows it will import, then imports it.
+  const autos = page.getByRole('group', { name: 'Autos' });
+  const dataTransfer = await page.evaluateHandle((text) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([text], 'two-piece.auto.json', { type: 'application/json' }));
+    return dt;
+  }, await readFile(file, 'utf8'));
+  await autos.dispatchEvent('dragenter', { dataTransfer });
+  await expect(page.getByText('Drop auto files')).toBeVisible();
+  await autos.dispatchEvent('drop', { dataTransfer });
+  await expect(list.locator('li.active .auto-name')).toHaveText('Two Piece 3');
+  await expect(page.getByText('Drop auto files')).toHaveCount(0);
+  await expect(list.locator('li')).toHaveCount(4);
 });
 
 test.describe('phone', () => {

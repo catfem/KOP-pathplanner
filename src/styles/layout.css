@@ -118,6 +118,23 @@
   margin-bottom: 6px;
 }
 
+.side-head-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.side-section.drop-target {
+  outline: 1.5px dashed var(--accent);
+  outline-offset: -4px;
+  background: var(--accent-soft);
+}
+
+.drop-hint {
+  margin-top: 6px;
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+
 .side-head h2 {
   font-size: var(--text-xs);
   font-weight: 600;
