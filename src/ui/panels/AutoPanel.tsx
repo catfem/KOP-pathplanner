@@ -1,8 +1,9 @@
 import { makeAllStraight, mirrorAuto } from '../../model/edit';
+import { FRONT_LABELS, autoFront } from '../../model/hardware';
 import { setUi, updateAuto, useStore } from '../../model/store';
-import type { Auto } from '../../model/types';
+import type { Auto, RobotFront } from '../../model/types';
 import type { Plan, PlanStep } from '../../planner/trajectory';
-import { Section, TextField } from '../components/controls';
+import { Section, Segmented, TextField } from '../components/controls';
 
 function describe(st: PlanStep): string {
   switch (st.kind) {
@@ -24,10 +25,35 @@ function describe(st: PlanStep): string {
 export function AutoPanel({ auto, plan }: { auto: Auto; plan: Plan | null }) {
   const field = useStore((s) => s.project.field);
   const autoPeriod = useStore((s) => s.project.codegen.autoPeriod);
+  const robotFront = useStore((s) => s.project.robot.front);
+  const front = autoFront(auto, { front: robotFront });
+  const lead = (f: RobotFront) => FRONT_LABELS[f].toLowerCase();
   return (
     <div className="panel-scroll">
       <Section title="Auto">
         <TextField label="Name" value={auto.name} onChange={(v) => updateAuto((a) => (a.name = v), { coalesce: `${auto.id}:name` })} />
+        <div className="field">
+          <span className="field-label">Front in this auto</span>
+          <Segmented<RobotFront | 'robot'>
+            label="Front in this auto"
+            value={auto.front ?? 'robot'}
+            onChange={(v) =>
+              updateAuto((a) => {
+                a.front = v === 'robot' ? null : v;
+              })
+            }
+            options={[
+              { value: 'robot', label: `Robot's (${FRONT_LABELS[robotFront]})`, title: 'Use the front set on the Robot tab' },
+              { value: 'head', label: FRONT_LABELS.head },
+              { value: 'intake', label: FRONT_LABELS.intake },
+            ]}
+          />
+          <div className="hint">
+            {front === robotFront
+              ? 'The end that leads in this auto, aims at a HUB and touches it. Pick the other end to run just this auto the other way round.'
+              : `This auto leads with the ${lead(front)} end; the robot's front is the ${lead(robotFront)} end. The generated code drives it backwards with the sides swapped, so nothing is rewired.`}
+          </div>
+        </div>
         {plan && (
           <dl className="stats">
             <div>

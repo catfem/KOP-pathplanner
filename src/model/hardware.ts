@@ -1,4 +1,4 @@
-import type { ControllerType, EncoderType, MotorType, RobotConfig, RobotFront } from './types';
+import type { Auto, ControllerType, EncoderType, MotorType, RobotConfig, RobotFront } from './types';
 
 export type ControllerFamily = 'pwm' | 'ctre' | 'rev';
 
@@ -79,6 +79,16 @@ export function withFront(robot: RobotConfig, front: RobotFront): RobotConfig {
     invertLeftEncoder: rio ? !robot.invertRightEncoder : robot.invertRightEncoder,
     invertRightEncoder: rio ? !robot.invertLeftEncoder : robot.invertLeftEncoder,
   };
+}
+
+/** The end that leads in an auto: its own front, or the robot's. */
+export function autoFront(auto: Pick<Auto, 'front'>, robot: Pick<RobotConfig, 'front'>): RobotFront {
+  return auto.front ?? robot.front;
+}
+
+/** The robot as it drives an auto: with the auto's end as the front (wiring and wheel balance mirrored). */
+export function robotForAuto(robot: RobotConfig, auto: Pick<Auto, 'front'>): RobotConfig {
+  return withFront(robot, autoFront(auto, robot));
 }
 
 /** Wheel meters per encoder unit (rio: cycles, Talon: sensor units, SPARK MAX: motor rotations). */

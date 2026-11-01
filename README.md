@@ -29,7 +29,9 @@ controller encoders, or no sensors at all.
 - **Front of the robot**: choose whether the **head** or the **intake** end leads (Robot tab).
   The front drives first, aims at the HUB and touches it with "bumper against the HUB".
   Switching swaps the left/right motor IDs, encoder ports, inversions and wheel balance for you,
-  so the generated code drives the other end first without rewiring.
+  so the generated code drives the other end first without rewiring. A single auto can lead with
+  the other end too (Auto tab → Front in this auto): the code drives that auto backwards with the
+  sides swapped, which is exactly what the robot would do wired that way round.
 - **Trajectory planning** for a differential drive: time-optimal velocity profile limited by max
   speed, acceleration, centripetal acceleration, per-wheel speed and per-segment speed limits.
   Includes turn-in-place profiles.

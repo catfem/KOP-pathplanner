@@ -441,6 +441,25 @@ test('the autos list imports with its button and by dropping files on it', async
   await expect(list.locator('li')).toHaveCount(4);
 });
 
+test('one auto can lead with the other end, and keeps it after a reload', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Auto', exact: true }).click();
+  const fronts = page.getByRole('radiogroup', { name: 'Front in this auto' });
+  await expect(fronts.getByRole('radio', { name: "Robot's (Head)" })).toHaveAttribute('aria-checked', 'true');
+  await fronts.getByRole('radio', { name: 'Intake', exact: true }).click();
+  await expect(page.getByText("This auto leads with the intake end; the robot's front is the head end.")).toBeVisible();
+
+  // Only this auto changed.
+  await page.locator('.auto-list li', { hasText: 'Drive And Turn' }).locator('.auto-item').click();
+  await expect(fronts.getByRole('radio', { name: "Robot's (Head)" })).toHaveAttribute('aria-checked', 'true');
+
+  await page.reload();
+  await page.locator('.auto-list li', { hasText: 'Two Piece' }).locator('.auto-item').click();
+  await page.getByRole('tab', { name: 'Auto', exact: true }).click();
+  await expect(fronts.getByRole('radio', { name: 'Intake', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await fronts.getByRole('radio', { name: "Robot's (Head)" }).click();
+  await expect(page.getByText('Pick the other end to run just this auto the other way round.')).toBeVisible();
+});
+
 test.describe('phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
   test('has no horizontal overflow', async ({ page }) => {

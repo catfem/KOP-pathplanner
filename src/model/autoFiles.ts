@@ -98,6 +98,7 @@ function toAuto(raw: unknown): Auto | null {
     id: '',
     name: typeof src.name === 'string' && src.name.trim() ? src.name.trim() : 'Imported auto',
     waypoints: src.waypoints.map((w, i) => normalizeWaypoint(w && typeof w === 'object' ? w : {}, i)),
+    ...(src.front === 'head' || src.front === 'intake' ? { front: src.front } : {}),
   };
 }
 

@@ -88,6 +88,7 @@ export function normalizeProject(raw: unknown): Project {
         id: typeof a.id === 'string' ? a.id : `auto_${i}`,
         name: typeof a.name === 'string' ? a.name : `Auto ${i + 1}`,
         waypoints: Array.isArray(a.waypoints) ? a.waypoints.map(normalizeWaypoint) : [],
+        ...(a.front === 'head' || a.front === 'intake' ? { front: a.front } : {}),
       }))
     : base.autos;
   return {

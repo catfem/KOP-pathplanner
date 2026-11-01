@@ -15,6 +15,7 @@ import {
   formatRow,
   headerComment,
   num,
+  otherEndNote,
   pascalCase,
   quote,
   realRobotChecklist,
@@ -1599,7 +1600,7 @@ ${trajectoryField('private static final', 'TURN', turn)}
 `;
 }
 
-function autosFile(pkg: string, autos: IRAuto[]): string {
+function autosFile(pkg: string, autos: IRAuto[], robotFront: RobotFront): string {
   const methodNames = javaMethodNames(autos);
   const dataClasses = uniqueNames(autos.map((a) => `${pascalCase(a.words)}Data`));
   const allCommands = [...new Set(autos.flatMap((a) => a.commands))].sort();
@@ -1616,6 +1617,7 @@ function autosFile(pkg: string, autos: IRAuto[]): string {
     const docLines = [
       `${auto.name} (estimated ${num(auto.plan.totalTime, 2)} s, ${num(auto.plan.totalDistance, 2)} m of driving).`,
       '',
+      ...otherEndNote(auto, robotFront).map((l) => (l ? `<p>${l}` : l)),
       ...(auto.commands.length ? [`<p>Named commands used: ${auto.commands.join(', ')}.`, ''] : []),
       '@param drive the drivetrain',
       '@param mirror evaluated when each motion starts; true mirrors the path (left/right turns swap)',
@@ -1785,7 +1787,7 @@ export function generateJava(project: Project, autos: IRAuto[]): GeneratedFile[]
   const dir = `src/main/java/${pkg.replace(/\./g, '/')}`;
   const methodNames = javaMethodNames(autos);
   return [
-    { path: `${dir}/KopAutos.java`, content: autosFile(pkg, autos) },
+    { path: `${dir}/KopAutos.java`, content: autosFile(pkg, autos, project.robot.front) },
     { path: `${dir}/KopDriveConstants.java`, content: constantsFile(pkg, project) },
     { path: `${dir}/KopDrivetrain.java`, content: drivetrainFile(pkg, project.robot) },
     { path: `${dir}/KopDrive.java`, content: driveInterfaceFile(pkg) },
