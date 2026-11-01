@@ -13,6 +13,7 @@ import {
   formatRow,
   headerComment,
   num,
+  otherEndNote,
   avoidReserved,
   quote,
   realRobotChecklist,
@@ -1207,7 +1208,7 @@ ${trajectoryLiteral('TURN', turn, 'Test: one full turn to the left in place')}
 `;
 }
 
-function autosFile(autos: IRAuto[], funcNames: string[]): string {
+function autosFile(autos: IRAuto[], funcNames: string[], robotFront: RobotFront): string {
   const allCommands = [...new Set(autos.flatMap((a) => a.commands))].sort();
   const dataPrefixes = funcNames.map((f) => f.toUpperCase());
   const funcs = autos.map((auto, i) => {
@@ -1217,6 +1218,7 @@ function autosFile(autos: IRAuto[], funcNames: string[]): string {
     const doc = [
       `${auto.name} (estimated ${num(auto.plan.totalTime, 2)} s, ${num(auto.plan.totalDistance, 2)} m of driving).`,
       '',
+      ...otherEndNote(auto, robotFront),
       ...(auto.commands.length ? [`Named commands used: ${auto.commands.join(', ')}.`, ''] : []),
       '`mirror` is called when each motion starts; True mirrors the path (left/right turns swap).',
     ];
@@ -1376,7 +1378,7 @@ ${realRobotChecklist('python', encoders, front)}`;
 export function generatePython(project: Project, autos: IRAuto[]): GeneratedFile[] {
   const funcNames = uniqueNames(autos.map((a) => avoidReserved(snakeCase(a.words), PYTHON_RESERVED, '_auto')));
   return [
-    { path: 'kop/autos.py', content: autosFile(autos, funcNames) },
+    { path: 'kop/autos.py', content: autosFile(autos, funcNames, project.robot.front) },
     { path: 'kop/constants.py', content: constantsFile(project) },
     { path: 'kop/drive.py', content: drivetrainFile(project.robot) },
     { path: 'kop/follow.py', content: followerFile() },

@@ -3,8 +3,9 @@
 
 import { TEST_DRIVE_METERS } from '../model/calibration';
 import { makeWaypoint } from '../model/defaults';
+import { autoFront } from '../model/hardware';
 import type { Auto, Project, RobotFront } from '../model/types';
-import { type Plan, type TrajState, buildTurnSamples, planAuto } from '../planner/trajectory';
+import { type Plan, type TrajState, buildTurnSamples, otherEndSamples, planAuto } from '../planner/trajectory';
 
 export interface GeneratedFile {
   /** Path relative to the robot project root, e.g. src/main/java/frc/robot/kop/KopAutos.java */
@@ -41,6 +42,13 @@ export interface IRAuto {
   steps: IRStep[];
   trajectories: IRTrajectory[];
   commands: string[];
+  /** The end that leads in this auto. */
+  front: RobotFront;
+  /**
+   * The auto leads with the other end than the robot's front: its trajectories are stored the way
+   * the robot drives them (backwards, sides swapped) and its start heading is turned around.
+   */
+  otherEnd: boolean;
 }
 
 export function nameWords(name: string): string[] {
@@ -134,7 +142,11 @@ export function buildIR(auto: Auto, project: Project, plan?: Plan): IRAuto {
       autoPeriod: project.codegen.autoPeriod,
       field: project.field,
     });
-  const steps: IRStep[] = [{ kind: 'start', x: p.startPose.x, y: p.startPose.y, heading: p.startPose.heading }];
+  const front = autoFront(auto, project.robot);
+  const otherEnd = front !== project.robot.front;
+  const robotFrame = (samples: TrajState[]) => (otherEnd ? otherEndSamples(samples) : samples);
+  const startHeading = p.startPose.heading + (otherEnd ? Math.PI : 0);
+  const steps: IRStep[] = [{ kind: 'start', x: p.startPose.x, y: p.startPose.y, heading: startHeading }];
   const trajectories: IRTrajectory[] = [];
   const commands = new Set<string>();
   let drives = 0;
@@ -151,7 +163,7 @@ export function buildIR(auto: Auto, project: Project, plan?: Plan): IRAuto {
       case 'turn': {
         turns += 1;
         const name = `TURN_${turns}`;
-        trajectories.push({ name, samples: st.samples });
+        trajectories.push({ name, samples: robotFrame(st.samples) });
         steps.push({
           kind: 'turn',
           data: name,
@@ -164,7 +176,7 @@ export function buildIR(auto: Auto, project: Project, plan?: Plan): IRAuto {
       case 'drive': {
         drives += 1;
         const name = `DRIVE_${drives}`;
-        trajectories.push({ name, samples: st.samples });
+        trajectories.push({ name, samples: robotFrame(st.samples) });
         st.markers.forEach((m) => commands.add(m.name));
         steps.push({
           kind: 'drive',
@@ -180,7 +192,17 @@ export function buildIR(auto: Auto, project: Project, plan?: Plan): IRAuto {
       }
     }
   }
-  return { name: auto.name, words: nameWords(auto.name), plan: p, steps, trajectories, commands: [...commands] };
+  return { name: auto.name, words: nameWords(auto.name), plan: p, steps, trajectories, commands: [...commands], front, otherEnd };
+}
+
+/** Doc line for an auto that leads with the other end than the robot's front. */
+export function otherEndNote(auto: IRAuto, robotFront: RobotFront): string[] {
+  return auto.otherEnd
+    ? [
+        `Leads with the ${auto.front} end (the robot's front is the ${robotFront} end): the robot drives these trajectories backwards, as stored below.`,
+        '',
+      ]
+    : [];
 }
 
 export { TEST_DRIVE_METERS };

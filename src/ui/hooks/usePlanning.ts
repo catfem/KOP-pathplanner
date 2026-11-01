@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
-import { effectiveEncoder } from '../../model/hardware';
+import { autoFront, effectiveEncoder } from '../../model/hardware';
 import type { Auto, Project } from '../../model/types';
-import { type SimResult, type SimSettings, simulatePlan } from '../../planner/simulate';
+import { type SimResult, type SimSettings, simulateOtherEnd, simulatePlan } from '../../planner/simulate';
 import { type Plan, planAuto } from '../../planner/trajectory';
 
 /** The same imperfect robot run the other way: open loop if the robot has encoders, with encoders if not. */
@@ -37,26 +37,30 @@ export function usePlanning(auto: Auto | undefined, project: Project, showSim: b
     }
   }, [auto, project.robot, project.commands, project.codegen.autoPeriod, project.field]);
 
+  // An auto that leads with the robot's other end is simulated the way the code drives it.
+  const otherEnd = !!auto && autoFront(auto, project.robot) !== project.robot.front;
+  const simulate = otherEnd ? simulateOtherEnd : simulatePlan;
+
   const sim = useMemo(() => {
     if (!planned.plan || !showSim) return null;
     try {
-      return simulatePlan(planned.plan, project.robot, simSettings);
+      return simulate(planned.plan, project.robot, simSettings);
     } catch (err) {
       console.error('KOP Path Planner: simulation failed', err);
       return null;
     }
-  }, [planned.plan, showSim, project.robot, simSettings]);
+  }, [planned.plan, showSim, project.robot, simSettings, simulate]);
 
   const comparison = useMemo((): SimComparison | null => {
     if (!planned.plan || !showSim) return null;
     const withEncoders = effectiveEncoder(project.robot) === 'none';
     try {
       const robot = { ...project.robot, encoder: withEncoders ? ('rio' as const) : ('none' as const) };
-      return { withEncoders, result: simulatePlan(planned.plan, robot, simSettings) };
+      return { withEncoders, result: simulate(planned.plan, robot, simSettings) };
     } catch {
       return null;
     }
-  }, [planned.plan, showSim, project.robot, simSettings]);
+  }, [planned.plan, showSim, project.robot, simSettings, simulate]);
 
   return { plan: planned.plan, sim, comparison, error: planned.error };
 }

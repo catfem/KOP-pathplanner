@@ -8,7 +8,7 @@
 import { balanceScales, effectiveEncoder, metersPerEncoderUnit } from '../model/hardware';
 import type { RobotConfig } from '../model/types';
 import { type EncoderFault, KopFollower, type WheelReadings } from './follower';
-import type { Plan } from './trajectory';
+import { type Plan, otherEndPlan } from './trajectory';
 
 export interface SimSettings {
   /** Torque multiplier of the left / right side (1 = matches the model). */
@@ -252,6 +252,15 @@ export function pathDeviation(plan: Plan, trace: SimPoint[]): number {
 }
 
 /** Pose of the simulated robot at time t (linear interpolation of the trace). */
+/**
+ * Simulates an auto that leads with the robot's other end the way the generated code drives it
+ * (backwards, sides swapped, see otherEndPlan), and reports the trace facing the auto's front.
+ */
+export function simulateOtherEnd(plan: Plan, robot: RobotConfig, settings: SimSettings, plantOptions: Partial<PlantOptions> = {}): SimResult {
+  const result = simulatePlan(otherEndPlan(plan), robot, settings, plantOptions);
+  return { ...result, trace: result.trace.map((p) => ({ ...p, heading: p.heading - Math.PI })) };
+}
+
 export function simPoseAt(sim: SimResult, t: number): SimPoint {
   const tr = sim.trace;
   if (t <= tr[0].t) return tr[0];

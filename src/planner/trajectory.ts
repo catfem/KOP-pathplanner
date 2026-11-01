@@ -785,6 +785,43 @@ export interface PlaybackState extends Pose {
   label: string;
 }
 
+/**
+ * The same motion, seen from the robot's other end: it drives backwards, faces the other way, and
+ * its left wheels are the old right wheels. Positions and turns on the field do not change.
+ */
+export function otherEndSamples(samples: TrajState[]): TrajState[] {
+  return samples.map((s) => ({
+    ...s,
+    heading: s.heading + Math.PI,
+    v: -s.v,
+    a: -s.a,
+    curvature: -s.curvature,
+    lPos: -s.rPos,
+    lVel: -s.rVel,
+    lAcc: -s.rAcc,
+    rPos: -s.lPos,
+    rVel: -s.lVel,
+    rAcc: -s.lAcc,
+  }));
+}
+
+/** A plan as the robot drives it with its other end first (see otherEndSamples). */
+export function otherEndPlan(plan: Plan): Plan {
+  const turned = (p: Pose): Pose => ({ ...p, heading: p.heading + Math.PI });
+  return {
+    ...plan,
+    startPose: turned(plan.startPose),
+    endPose: turned(plan.endPose),
+    steps: plan.steps.map((st) => {
+      if (st.kind === 'drive') return { ...st, reversed: !st.reversed, samples: otherEndSamples(st.samples) };
+      if (st.kind === 'turn') {
+        return { ...st, fromHeading: st.fromHeading + Math.PI, toHeading: st.toHeading + Math.PI, samples: otherEndSamples(st.samples) };
+      }
+      return st;
+    }),
+  };
+}
+
 /** Robot state at global time t (seconds from auto start). */
 export function sampleAt(plan: Plan, t: number): PlaybackState {
   let pose: Pose = plan.startPose;

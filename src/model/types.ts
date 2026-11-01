@@ -47,6 +47,12 @@ export interface Auto {
   id: string;
   name: string;
   waypoints: Waypoint[];
+  /**
+   * The end that leads in this auto (drives forward, aims at a HUB). Missing or null: the robot's
+   * front. When it differs from the robot's front, the generated code drives the auto with the
+   * other end first; the wiring stays as it is.
+   */
+  front?: RobotFront | null;
 }
 
 export type MotorType = 'CIM' | 'MiniCIM' | 'NEO' | 'NeoVortex' | 'Falcon500' | 'KrakenX60';
